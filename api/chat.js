@@ -13,50 +13,76 @@ module.exports = function handler(req, res) {
     return res.status(405).json({ error: { message: "Method not allowed" } });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  var apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: { message: "ANTHROPIC_API_KEY not set" } });
+    return res.status(500).json({ error: { message: "GEMINI_API_KEY not set in Vercel environment variables" } });
   }
 
   try {
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-    const { system, messages } = body;
+    var body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    var system = body.system || "";
+    var messages = body.messages || [];
 
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    if (!messages.length) {
       return res.status(400).json({ error: { message: "messages required" } });
     }
 
-    const payload = JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      system: system || "",
-      messages: messages,
+    var contents = [];
+    for (var i = 0; i < messages.length; i++) {
+      contents.push({
+        role: messages[i].role === "assistant" ? "model" : "user",
+        parts: [{ text: messages[i].content }]
+      });
+    }
+
+    var payload = JSON.stringify({
+      system_instruction: { parts: [{ text: system }] },
+      contents: contents,
+      generationConfig: {
+        maxOutputTokens: 1024,
+        temperature: 0.7
+      }
     });
 
-    const options = {
-      hostname: "api.anthropic.com",
+    var path = "/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+
+    var options = {
+      hostname: "generativelanguage.googleapis.com",
       port: 443,
-      path: "/v1/messages",
+      path: path,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Length": Buffer.byteLength(payload),
-      },
+        "Content-Length": Buffer.byteLength(payload)
+      }
     };
 
-    const apiReq = https.request(options, function (apiRes) {
-      let data = "";
-      apiRes.on("data", function (chunk) {
-        data += chunk;
-      });
+    var apiReq = https.request(options, function (apiRes) {
+      var data = "";
+      apiRes.on("data", function (chunk) { data += chunk; });
       apiRes.on("end", function () {
         try {
-          const parsed = JSON.parse(data);
-          res.status(apiRes.statusCode).json(parsed);
+          var parsed = JSON.parse(data);
+
+          if (parsed.error) {
+            return res.status(parsed.error.code || 500).json({
+              error: { message: parsed.error.message || "Gemini API error" }
+            });
+          }
+
+          var text = "";
+          if (parsed.candidates && parsed.candidates[0] && parsed.candidates[0].content) {
+            var parts = parsed.candidates[0].content.parts;
+            for (var j = 0; j < parts.length; j++) {
+              if (parts[j].text) text += parts[j].text;
+            }
+          }
+
+          res.status(200).json({
+            content: [{ type: "text", text: text || "No response generated" }]
+          });
         } catch (e) {
-          res.status(500).json({ error: { message: "Parse error" } });
+          res.status(500).json({ error: { message: "Parse error: " + data.substring(0, 300) } });
         }
       });
     });
