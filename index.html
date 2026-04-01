@@ -62,8 +62,18 @@ body{font-family:'Outfit','Noto Sans Arabic',sans-serif;background:#0B1120;color
 .sn{width:36px;height:36px;border-radius:10px;border:none;background:rgba(255,255,255,.04);color:#475569;font-size:16px;cursor:default;display:flex;align-items:center;justify-content:center;transition:all .2s;flex-shrink:0}
 .sn.on{background:linear-gradient(135deg,#0EA5E9,#0284C7);color:#fff;cursor:pointer}
 .ifo{text-align:center;font-size:10px;color:#1E293B;margin-top:8px;font-family:'Fira Code',monospace}
-.ov{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:15;display:none}.ov.op{display:block}
-@media(max-width:768px){.sb{position:fixed;left:-270px;top:0;bottom:0;transition:left .25s ease;z-index:20}.sb.op{left:0}.hb{display:block}.sg{grid-template-columns:1fr}}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:40;display:none}.ov.op{display:block}
+@media(max-width:768px){
+.sb{position:fixed;left:-270px;top:0;bottom:0;transition:left .25s ease;z-index:50;background:#0B1120;width:260px;min-width:260px}
+.sb.op{left:0}
+.hb{display:block}
+.sg{grid-template-columns:1fr}
+.ov.op{z-index:40}
+.wl{padding:20px 10px}
+.wl h2{font-size:18px}
+.wl p{font-size:12px}
+.bb{max-width:90%}
+}
 </style>
 </head>
 <body>
