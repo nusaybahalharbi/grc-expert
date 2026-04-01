@@ -44,7 +44,7 @@ module.exports = function handler(req, res) {
       }
     });
 
-    var path = "/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+    var path = "/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + apiKey;
 
     var options = {
       hostname: "generativelanguage.googleapis.com",
