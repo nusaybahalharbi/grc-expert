@@ -39,7 +39,7 @@ module.exports = function handler(req, res) {
       system_instruction: { parts: [{ text: system }] },
       contents: contents,
       generationConfig: {
-        maxOutputTokens: 1024,
+        maxOutputTokens: 4096,
         temperature: 0.7
       }
     });
