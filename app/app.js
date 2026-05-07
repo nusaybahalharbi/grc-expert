@@ -51,7 +51,7 @@
         else if (p.stage === 'ready') {
           State.kbReady = true;
           const stats = window.retrieval.stats();
-          setKbStatus('ready', `KB: ${stats.totalChunks} chunks`);
+          setKbStatus('ready', 'Knowledge Base Active');
         }
       });
 
@@ -60,7 +60,7 @@
       if (userChunks.length > 0) {
         window.retrieval.addUserChunks(userChunks);
         const stats = window.retrieval.stats();
-        setKbStatus('ready', `KB: ${stats.totalChunks} (${stats.userChunks} yours)`);
+        setKbStatus('ready', 'Knowledge Base Active');
       }
       State.kbReady = true;
     } catch (e) {
@@ -391,7 +391,7 @@
           <div class="kb-stat">
             <div class="kb-stat-label">Your Documents</div>
             <div class="kb-stat-value">${stats.uniqueUserDocuments}</div>
-            <div class="kb-stat-sub">${stats.userChunks} chunks</div>
+            <div class="kb-stat-sub">${stats.userChunks} indexed segments</div>
           </div>
           <div class="kb-stat">
             <div class="kb-stat-label">Status</div>
@@ -674,7 +674,7 @@
     typing.className = 'msg-row bot';
     typing.innerHTML = `
       <div class="bubble bot">
-        <div class="msg-tag">GRC Expert <span class="msg-model">analyzing ${retrievedChunks.length > 0 ? `· ${retrievedChunks.length} sources` : '· general knowledge'}</span></div>
+        <div class="msg-tag">GRC Expert <span class="msg-model">analyzing your query...</span></div>
         <div class="dots"><span></span><span></span><span></span></div>
       </div>
     `;
@@ -784,7 +784,7 @@
     const row = document.createElement('div');
     row.className = 'msg-row bot';
     const modeTag = State.currentGenerator ? `<span class="msg-mode">${State.currentGenerator}</span>` : '';
-    const modelTag = modelUsed ? `<span class="msg-model">${modelUsed}</span>` : '';
+    const modelTag = ''; // model name only logged to console, not shown in UI
 
     let citationsHtml = '';
     if (citations && citations.length > 0) {

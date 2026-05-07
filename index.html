@@ -4,37 +4,50 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
 <title>GRC Expert — AI-Powered Saudi & International Compliance Platform</title>
-<meta name="description" content="Enterprise AI GRC platform with NCA, SAMA, CST, SDAIA, ISO 27001, SOC 2, NIST CSF and more. Built for Saudi compliance professionals.">
+<meta name="description" content="Enterprise AI GRC platform with NCA, SAMA, CST, SDAIA, ISO 27001, SOC 2, NIST CSF and more.">
 <meta name="theme-color" content="#060912">
 
-<!-- Fonts -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-<!-- App styles -->
 <link rel="stylesheet" href="/app/styles.css">
 
-<!-- File parsing libraries (loaded from CDN) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<!--
+  Library loading strategy:
+  ALL scripts use defer. With defer, they execute in ORDER of appearance,
+  after HTML parsing. So CDN libs load first, then our modules.
+-->
 
-<!-- Export libraries (Word, PDF) -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js" defer></script>
+<!-- CDN: File parsing -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- CDN: Export libraries - using jsdelivr for docx (not on cdnjs), cdnjs for jsPDF -->
+<script defer src="https://cdn.jsdelivr.net/npm/docx@9.1.1/build/index.umd.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/3.0.3/jspdf.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
+
+<!-- App modules (load AFTER CDN libs because all are defer in order) -->
+<script defer src="/app/sources.js"></script>
+<script defer src="/app/ui.js"></script>
+<script defer src="/app/storage.js"></script>
+<script defer src="/app/retrieval.js"></script>
+<script defer src="/app/parsers.js"></script>
+<script defer src="/app/exporter.js"></script>
+<script defer src="/app/app.js"></script>
+
+<!-- Post-init: configure PDF.js worker, verify libraries, wire sidebar toggle -->
+<script defer src="/app/init.js"></script>
 </head>
 <body>
 
 <div class="app">
-  <!-- Decorative background -->
   <div class="bg-decoration"></div>
-
-  <!-- Mobile overlay -->
   <div class="overlay" id="overlay"></div>
 
-  <!-- ============ SIDEBAR ============ -->
+  <!-- SIDEBAR -->
   <aside class="sidebar" id="sidebar">
     <div class="sb-header">
       <div class="brand">
@@ -77,11 +90,12 @@
       </div>
       <div class="credit">
         Built by <strong>Nusaybah AlHarbi</strong><br>
+        Powered by AI
       </div>
     </div>
   </aside>
 
-  <!-- ============ MAIN AREA ============ -->
+  <!-- MAIN -->
   <main class="main">
     <header class="topbar">
       <div class="topbar-left">
@@ -96,22 +110,18 @@
       <div class="topbar-right">
         <div class="kb-status loading" id="kbStatus">
           <div class="kb-status-dot"></div>
-          <span class="kb-status-text">Loading KB...</span>
+          <span class="kb-status-text">Initializing...</span>
         </div>
       </div>
     </header>
 
-    <div class="chat-area" id="chatArea">
-      <!-- Welcome screen / messages / page content rendered here -->
-    </div>
+    <div class="chat-area" id="chatArea"></div>
 
-    <!-- File processing indicator -->
     <div class="file-processing" id="fileProcessing" style="display:none;">
       <div class="file-spin"></div>
       <span id="procText">Processing file...</span>
     </div>
 
-    <!-- Input bar -->
     <div class="input-bar" id="inputBar">
       <div class="input-wrapper">
         <div class="attached-files" id="attached"></div>
@@ -130,39 +140,11 @@
         <div class="input-meta-left">
           <span>Press Enter to send · Shift+Enter for new line</span>
         </div>
-        <div>GRC Expert v2.0 · Phase 1</div>
+        <div>GRC Expert</div>
       </div>
     </div>
   </main>
 </div>
-
-<!-- App modules - load order matters -->
-<script src="/app/sources.js"></script>
-<script src="/app/ui.js"></script>
-<script src="/app/storage.js"></script>
-<script src="/app/retrieval.js"></script>
-<script src="/app/parsers.js"></script>
-<script src="/app/exporter.js"></script>
-<script src="/app/app.js"></script>
-
-<!-- Configure PDF.js worker after libraries load -->
-<script>
-window.addEventListener('load', function() {
-  if (window.pdfjsLib) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  }
-
-  // Wire framework toggle
-  var fwToggle = document.getElementById('fwToggle');
-  var fwList = document.getElementById('fwList');
-  if (fwToggle && fwList) {
-    fwToggle.addEventListener('click', function() {
-      fwList.classList.toggle('open');
-      fwToggle.classList.toggle('open');
-    });
-  }
-});
-</script>
 
 </body>
 </html>
