@@ -44,8 +44,8 @@ module.exports = function handler(req, res) {
       }
     });
 
-    var path = "/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
-
+var path = "/v1beta/models/gemini-2.0-flash-001:generateContent?key=" + apiKey;
+    
     var options = {
       hostname: "generativelanguage.googleapis.com",
       port: 443,
