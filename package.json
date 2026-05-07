@@ -1,5 +1,6 @@
 {
-  "name": "compliancegpt",
-  "version": "1.0.0",
-  "private": true
+  "name": "grc-expert",
+  "version": "2.0.0",
+  "private": true,
+  "description": "AI-Powered Saudi & International GRC Compliance Platform - Phase 1"
 }
