@@ -1,174 +1,239 @@
 /**
- * GRC Expert API - Phase 1
+ * GRC Expert API - v2.1 (Production Hardened)
  *
- * Receives:
- *   - messages: conversation history
- *   - retrievedChunks: [{title, framework, source, text, citation}] from frontend retrieval
- *   - mode: which framework mode is active
- *   - generator: which generator preset (chat | policy | procedure | risk_register | audit_evidence | gap | mapping)
- *   - organizationContext: optional details for personalization
- *
- * Returns:
- *   - content: AI response (markdown)
- *   - citations: array of cited sources used
- *   - modelUsed: which Gemini model answered
+ * Fixes:
+ *  - Only uses gemini-2.5-flash (main) and gemini-2.5-flash-lite (fallback)
+ *  - Removed all deprecated model references
+ *  - Deduplicates retrieved chunks before sending
+ *  - Trims chunk text to prevent token explosion
+ *  - Anti-repetition: explicit instruction + lower temperature for tables
+ *  - Comprehensive logging
+ *  - Timeout protection (25s)
+ *  - Retry on transient errors with exponential backoff
  */
 
 const https = require("https");
 
-const MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"];
+// ONLY supported models in 2026
+const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
-// ============================================================
-// SYSTEM PROMPTS BY MODE
-// ============================================================
+const REQUEST_TIMEOUT_MS = 25000;
+const MAX_CHUNK_TEXT_CHARS = 1500;
+const MAX_TOTAL_CONTEXT_CHARS = 18000;
 
-const BASE_PERSONA = `You are GRC Expert — a senior cybersecurity Governance, Risk, and Compliance consultant with 15+ years of experience advising Saudi enterprises and regulated international organizations. You operate as a hybrid of senior auditor, compliance architect, and governance advisor.
+const BASE_PERSONA = `You are GRC Expert — a senior cybersecurity Governance, Risk, and Compliance consultant with 15+ years of experience advising Saudi enterprises and regulated international organizations.
 
 CORE BEHAVIOR:
-1. Answer like a professional consultant, not a chatbot. Use structure, tables, control IDs, and concrete deliverables.
+1. Answer like a professional consultant. Use clean structure, tables, control IDs, and concrete deliverables.
 2. ALWAYS cite specific control IDs (e.g., ECC 2-3-1, ISO 27001 A.5.15, SOC 2 CC6.1) when relevant.
-3. NEVER mix frameworks incorrectly. NCA controls are NCA. ISO is ISO. Don't blur them.
-4. Cross-reference frameworks ONLY when explicitly useful — and always label clearly: "ECC 2-3-1 (NCA) maps to A.5.15 (ISO 27001)".
-5. When the user provides retrieved knowledge base content (RETRIEVED CONTEXT below), USE IT as your primary source. Quote control IDs and text from it directly. State source attributions like [Source: NCA ECC v2024, control 2-3-1].
-6. If the retrieved context is empty or doesn't answer the question, say so explicitly: "Based on the available knowledge base, this specific information isn't indexed. Here's general guidance from my training:" — then provide general expert guidance and clearly mark it as such.
-7. NEVER invent control IDs or fabricate citations. If you don't know a specific control ID, don't make one up.
-8. Respond in the user's language. Arabic queries → Arabic response with proper terminology. English queries → English.
-9. Use markdown formatting: bold for emphasis, tables for comparisons, code blocks for code/config, headers for structure, bullet lists for items.
-10. End complex answers with a "Sources" section listing the specific documents/controls referenced.
+3. NEVER mix frameworks incorrectly. NCA controls are NCA. ISO is ISO.
+4. Cross-reference frameworks ONLY when explicitly useful — and always label clearly.
+5. The retrieved context is REFERENCE MATERIAL. NEVER copy chunks verbatim. Synthesize, paraphrase, structure professionally.
+6. Cite sources by name (e.g., "[Source: NCA ECC v2024]"). Don't dump raw text.
+7. NEVER invent control IDs or fabricate citations.
+8. Respond in the user's language. Arabic queries → Arabic. English → English.
+9. Use markdown: bold for emphasis, tables for comparisons, headers for structure.
+10. End complex answers with a "Sources" section.
+
+CRITICAL ANTI-REPETITION RULES:
+- DO NOT repeat the same sentence, paragraph, or table row more than once.
+- Cap risk registers at 20-25 entries unless asked for more.
+- Each table row must be UNIQUE.
+- If you find yourself repeating, STOP and conclude.
+- Aim for completeness, not length.
 
 SAUDI-FIRST PRINCIPLE:
-- For Saudi compliance questions, prioritize NCA frameworks (ECC, CSCC, CCC, OTCC, DCC, NCS, TCC, MSOC) and Saudi regulatory frameworks (SAMA, CST CRF, SDAIA PDPL).
-- Use international standards (ISO 27001, NIST CSF, SOC 2) only when explicitly requested or when cross-referencing.
-- For policies/procedures, default to NCA toolkit structure (Purpose, Scope, Roles & Responsibilities, Policy Statements, Compliance Monitoring, Update & Review).
+- Prioritize NCA (ECC, CSCC, CCC, OTCC, DCC, NCS, TCC, MSOC) and Saudi regulators (SAMA, CST, SDAIA).
+- Use international standards only when explicitly requested.
+- Default to NCA toolkit structure for policies.
 
 ANTI-HALLUCINATION:
-- Distinguish clearly between: (a) facts from retrieved context, (b) widely-known framework facts, (c) your professional opinion/recommendation.
-- If asked about a specific control ID and the retrieval didn't return it, say "I cannot find that exact control reference in the indexed knowledge base. Please verify with the official source."
-- Always mention official source URLs when relevant: NCA (nca.gov.sa), SAMA (sama.gov.sa), CST (cst.gov.sa), SDAIA (sdaia.gov.sa), ISO (iso.org).`;
+- If retrieved context lacks the answer, say: "Based on the indexed knowledge base, this isn't available. Here's general guidance:" then answer.`;
 
 const MODE_PROMPTS = {
-  chat: `MODE: General GRC Consulting
-Provide structured, expert answers. Use the user's framework focus to prioritize relevant content. Cross-reference when helpful but don't force it.`,
+  chat: `MODE: General GRC Consulting. Provide structured expert answers.`,
 
-  saudi: `MODE: Saudi GRC (NCA + SAMA + CST + SDAIA)
-Answer ONLY using Saudi frameworks. Mention international standards only if the user explicitly asks for cross-mapping. Default to NCA ECC for general cybersecurity questions, SAMA for financial sector, CST for telecom/ICT, SDAIA for data privacy.`,
+  saudi: `MODE: Saudi GRC. Use only Saudi frameworks unless cross-mapping requested.`,
 
-  nca: `MODE: NCA Frameworks
-Focus exclusively on NCA: ECC, CSCC, CCC, OTCC, DCC, NCS, TCC, MSOC, plus the NCA cybersecurity toolkit (policies/standards/procedures). Use exact NCA control numbering format (X-Y-Z-W). Reference NCA toolkit templates by name when generating governance docs.`,
+  international: `MODE: International Standards. Use ISO/NIST/SOC 2/CIS/PCI-DSS exactly.`,
 
-  sama: `MODE: SAMA CSF
-Focus on SAMA Cyber Security Framework, SAMA CRFR (Cyber Risk Framework Regulation), and SAMA MVC (Minimum Viable Controls). Use SAMA's domain structure: Cyber Security Leadership and Governance, Cyber Security Risk Management, Cyber Security Operations, and Third Party Cyber Security.`,
+  mapping: `MODE: Framework Mapping. Output a markdown table: Control Topic | Source | Target | Notes. 15-30 confirmed mappings only.`,
 
-  cst: `MODE: CST Regulations
-Focus on CST CRF (Cybersecurity Regulatory Framework for ICT Service Providers). Use CST control structure and reference the CRF document.`,
+  policy: `MODE: Policy Document Generation
+Generate ONE complete policy. Required structure (each section EXACTLY ONCE):
 
-  pdpl: `MODE: SDAIA PDPL
-Focus on the Saudi Personal Data Protection Law and SDAIA implementing regulations. Reference articles by number, data subject rights, controller obligations, and breach notification requirements.`,
+# [Policy Title]
 
-  international: `MODE: International Standards
-Focus on ISO 27001/27002, NIST CSF, NIST 800-53, SOC 2, CIS Controls, PCI-DSS, COBIT. Use exact international control numbering (e.g., A.5.15, CC6.1, PR.AC-1).`,
+**Document Information**
+| Field | Value |
+|-------|-------|
+| Title | ... |
+| Version | 1.0 |
+| Date | ... |
+| Owner | ... |
+| Approver | ... |
+| Classification | Internal |
 
-  mapping: `MODE: Framework Mapping
-The user wants to compare/map controls across frameworks. Output as a markdown table with columns: Control Topic | Source Framework | Target Framework | Mapping Notes. Be precise — only confirmed mappings, never guessed ones.`,
+## 1. Purpose [2-3 sentences]
+## 2. Scope [Who/what applies]
+## 3. Definitions [3-8 terms max]
+## 4. Roles and Responsibilities [Table: Role | Responsibility — 4-8 entries]
+## 5. Policy Statements [Numbered, 8-15 statements max]
+## 6. Compliance Monitoring
+## 7. Exceptions and Violations
+## 8. Related Documents
+## 9. Review and Update [Annual]
+## 10. Approval
 
-  policy: `MODE: Policy Generation
-Generate a complete, professional policy document. Structure REQUIRED:
-1. **Document Information** (table: Title, Version, Date, Owner, Approver)
-2. **1. Purpose**
-3. **2. Scope** (who/what/where it applies)
-4. **3. Definitions** (key terms)
-5. **4. Roles and Responsibilities** (table)
-6. **5. Policy Statements** (numbered, specific, enforceable)
-7. **6. Compliance Monitoring**
-8. **7. Exceptions and Violations**
-9. **8. Related Documents** (link to procedures/standards)
-10. **9. Review and Update**
-11. **10. Approval**
-Adapt the policy to the user's organization (name, sector, scope) when provided. Reference applicable framework controls (e.g., "Aligned with NCA ECC 2-3-1, ISO 27001 A.5.15").`,
+DO NOT generate multiple versions. DO NOT exceed counts.`,
 
-  procedure: `MODE: Procedure Generation
-Generate a complete, executable procedure. Structure REQUIRED:
-1. **Document Information**
-2. **1. Purpose**
-3. **2. Scope**
-4. **3. Roles and Responsibilities**
-5. **4. Inputs and Prerequisites**
-6. **5. Procedure Steps** (numbered, with role responsible, action, output for each step)
-7. **6. Outputs and Deliverables**
-8. **7. Records and Evidence**
-9. **8. Exceptions**
-10. **9. References** (policies, standards, framework controls)
-11. **10. Review and Update**
-Make steps concrete and actionable. Include decision points and escalation paths.`,
+  procedure: `MODE: Procedure Document Generation
+Generate ONE procedure. Each section EXACTLY ONCE:
+
+# [Procedure Title]
+
+**Document Information** [table]
+
+## 1. Purpose
+## 2. Scope
+## 3. Roles and Responsibilities [table]
+## 4. Inputs and Prerequisites
+## 5. Procedure Steps [Table: Step # | Role | Action | Output — 8-20 max]
+## 6. Outputs and Deliverables
+## 7. Records and Evidence
+## 8. Exceptions
+## 9. References
+## 10. Review and Update`,
 
   risk_register: `MODE: Risk Register Generation
-Output a complete risk register as a markdown table. Required columns:
+Output a complete risk register as a markdown table with EXACTLY these columns in this order:
+
 | Risk ID | Risk Title | Risk Description | Asset/Process | Threat | Vulnerability | Existing Controls | Likelihood (1-5) | Impact (1-5) | Inherent Risk (LxI) | Risk Treatment | Treatment Actions | Owner | Target Date | Residual Risk | Status |
-After the table, add a **Risk Methodology** section explaining the scoring rubric (1-5 scale for L and I), a **Risk Heat Map summary**, and **Top Risks** narrative.
-Align with ISO 31000 and NCA Risk Management Procedure structure.`,
+
+Generate 15-25 UNIQUE risk entries. Risk IDs: R-001, R-002, etc. Each row must be different.
+
+After the table, add THREE sections (each appears once):
+
+## Risk Methodology
+- Likelihood: 1=Rare, 2=Unlikely, 3=Possible, 4=Likely, 5=Almost Certain
+- Impact: 1=Insignificant, 2=Minor, 3=Moderate, 4=Major, 5=Catastrophic
+- Inherent Risk = L × I (1-25)
+- Levels: Low (1-4), Medium (5-9), High (10-15), Critical (16-25)
+
+## Top Risks [Top 5 by score, listed once]
+
+## Treatment Summary [Avoid/Reduce/Transfer/Accept counts]
+
+CRITICAL: NO duplicate rows. STOP at 25 entries.`,
 
   audit_evidence: `MODE: Audit Evidence Builder
-For the requested control(s) or framework, output a comprehensive Evidence Request List (ERL). Format as a table:
-| # | Control ID | Control Description | Evidence Type (Document/Screenshot/Config/Log/Interview) | Specific Evidence Requested | Sample Period | Auditor Notes |
-Group by control domain. Include both design effectiveness evidence (policies, procedures, configs) and operating effectiveness evidence (logs, records, samples for periods).`,
+ONE table:
+| # | Control ID | Control Description | Evidence Type | Specific Evidence Requested | Sample Period | Auditor Notes |
+
+20-40 unique entries grouped by domain.`,
 
   gap: `MODE: Gap Assessment
-Output a complete compliance gap assessment. Format as a table:
-| Control ID | Control Requirement | Current State | Gap Description | Severity (Low/Medium/High/Critical) | Remediation Action | Effort (S/M/L) | Owner | Target Date |
-After the table, add: **Executive Summary** (2-3 paragraphs), **Top Gaps** (top 5 by severity), **Remediation Roadmap** (Quick Wins / Short-term / Long-term).`,
+ONE table:
+| Control ID | Control Requirement | Current State | Gap Description | Severity | Remediation Action | Effort | Owner | Target Date |
+
+15-30 unique entries.
+
+Then ONCE:
+## Executive Summary [2-3 paragraphs]
+## Top 5 Gaps
+## Remediation Roadmap [Quick Wins / Short-term / Long-term]`,
 
   mapping_doc: `MODE: Framework Mapping Document
-Generate a comprehensive control mapping. Output a table mapping every control from the source framework to equivalent controls in target framework(s). Include: gaps where no equivalent exists. After the table, add a summary of key differences in scope, granularity, and emphasis.`,
+ONE comprehensive table. Each row a unique control pair. 30-60 mappings max. Then 3-5 bullet differences summary.`,
 
   file_analysis: `MODE: Document Analysis
-The user has uploaded a document (provided in the user message under [UPLOADED FILE]). Analyze it thoroughly:
-1. Identify the document type (policy/procedure/standard/control list/audit report/etc.)
-2. Identify which framework(s) it references or aligns with
-3. Provide a structured analysis: Summary, Key Findings, Strengths, Gaps/Issues, Recommendations
-4. If it's a policy: assess completeness against NCA toolkit / ISO 27001 structure
-5. If it's a control list: map to NCA ECC, ISO 27001, NIST CSF
-6. If it's an audit report: extract findings, classify by severity, suggest responses`,
+Analyze the uploaded file ONCE:
+1. Document type
+2. Framework alignment
+3. Summary (2-3 paragraphs)
+4. Key Findings (5-10 bullets)
+5. Strengths (3-5)
+6. Gaps (5-10)
+7. Recommendations (5-8)`,
 };
 
-// ============================================================
-// PROMPT BUILDER
-// ============================================================
+// ============ CHUNK CLEANING ============
+
+function cleanText(text) {
+  if (!text) return "";
+  let t = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  t = t.replace(/\s{4,}/g, "  ");
+  t = t.replace(/\n{3,}/g, "\n\n");
+  t = t.replace(/(.)\1{15,}/g, "$1$1$1");
+  return t.trim();
+}
+
+function deduplicateChunks(chunks) {
+  if (!chunks || chunks.length === 0) return [];
+  const seen = new Set();
+  const result = [];
+  for (const c of chunks) {
+    const text = cleanText(c.text || "");
+    const key = text.substring(0, 200).toLowerCase().replace(/\s+/g, " ");
+    if (key.length < 30) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({
+      ...c,
+      text: text.substring(0, MAX_CHUNK_TEXT_CHARS),
+    });
+  }
+  return result;
+}
+
+function trimContextToFit(chunks, maxTotalChars) {
+  let total = 0;
+  const result = [];
+  for (const c of chunks) {
+    const len = (c.text || "").length;
+    if (total + len > maxTotalChars) {
+      const remaining = maxTotalChars - total;
+      if (remaining > 200) {
+        result.push({ ...c, text: c.text.substring(0, remaining) + "..." });
+      }
+      break;
+    }
+    result.push(c);
+    total += len;
+  }
+  return result;
+}
+
+// ============ PROMPT BUILDER ============
 
 function buildSystemPrompt({ mode, generator, organizationContext, retrievedChunks, fwFocus }) {
   let prompt = BASE_PERSONA + "\n\n";
-
-  // Generator overrides mode for output structure
   const modeKey = generator || mode || "chat";
   prompt += MODE_PROMPTS[modeKey] || MODE_PROMPTS.chat;
   prompt += "\n\n";
 
   if (fwFocus && fwFocus !== "all") {
-    prompt += `FRAMEWORK FOCUS: The user has selected "${fwFocus}" — prioritize this framework. If retrieved context for this framework is empty, say so before falling back to general knowledge.\n\n`;
+    prompt += `FRAMEWORK FOCUS: User selected "${fwFocus}" — prioritize this framework.\n\n`;
   }
 
   if (organizationContext) {
-    prompt += `ORGANIZATION CONTEXT (use this to personalize generated documents):\n${organizationContext}\n\n`;
+    prompt += `ORGANIZATION CONTEXT:\n${organizationContext}\n\n`;
   }
 
-  // CRITICAL: retrieved chunks
   if (retrievedChunks && retrievedChunks.length > 0) {
-    prompt += `RETRIEVED CONTEXT (from indexed knowledge base — use these as PRIMARY source):\n\n`;
+    prompt += `RETRIEVED REFERENCE MATERIAL (inspiration only — DO NOT COPY VERBATIM):\n\n`;
     retrievedChunks.forEach((c, i) => {
-      prompt += `[CHUNK ${i + 1}] Source: ${c.framework} — ${c.title} (${c.category})\n${c.text}\n\n---\n\n`;
+      prompt += `[REF ${i + 1}] ${c.framework} — ${c.title}\n${c.text}\n\n---\n\n`;
     });
-    prompt += `END OF RETRIEVED CONTEXT.\n\n`;
-    prompt += `When citing, use this format: [Source: ${retrievedChunks[0].framework} — ${retrievedChunks[0].title}]\n`;
-    prompt += `If the retrieved chunks contain the answer, base your response on them. If they're partially relevant, use what's relevant and clearly label additional content as general guidance.\n\n`;
+    prompt += `END REFERENCES.\n\nSynthesize in your OWN words. Cite by reference name.\n\n`;
   } else {
-    prompt += `RETRIEVED CONTEXT: (no matching content in knowledge base for this query)\nProvide expert guidance from your training but explicitly mention: "This response is based on general framework knowledge, not specific indexed sources."\n\n`;
+    prompt += `RETRIEVED REFERENCE MATERIAL: (none — answer from professional knowledge, label clearly)\n\n`;
   }
 
   return prompt;
 }
 
-// ============================================================
-// GEMINI CALL
-// ============================================================
+// ============ GEMINI CALL ============
 
 function callGemini(modelName, apiKey, payload) {
   return new Promise((resolve, reject) => {
@@ -182,7 +247,9 @@ function callGemini(modelName, apiKey, payload) {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(payload),
       },
+      timeout: REQUEST_TIMEOUT_MS,
     };
+
     const req = https.request(options, (res) => {
       let data = "";
       res.on("data", (c) => (data += c));
@@ -190,19 +257,64 @@ function callGemini(modelName, apiKey, payload) {
         try {
           resolve({ status: res.statusCode, data: JSON.parse(data) });
         } catch (e) {
-          reject(new Error("Parse error: " + data.substring(0, 200)));
+          reject(new Error(`Parse error from ${modelName}: ${data.substring(0, 200)}`));
         }
       });
     });
-    req.on("error", reject);
+
+    req.on("error", (err) => reject(err));
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error(`Timeout calling ${modelName} after ${REQUEST_TIMEOUT_MS}ms`));
+    });
+
     req.write(payload);
     req.end();
   });
 }
 
-// ============================================================
-// HANDLER
-// ============================================================
+// ============ POST-PROCESSING ============
+
+function removeRepetition(text) {
+  if (!text) return text;
+
+  const lines = text.split("\n");
+  const result = [];
+  let prevLine = null;
+  let prevCount = 0;
+  for (const line of lines) {
+    if (line === prevLine && line.trim().length > 10) {
+      prevCount++;
+      if (prevCount > 2) continue;
+    } else {
+      prevLine = line;
+      prevCount = 1;
+    }
+    result.push(line);
+  }
+
+  let cleaned = result.join("\n");
+
+  const paragraphs = cleaned.split(/\n\n+/);
+  const seenP = new Set();
+  const filteredP = [];
+  for (const p of paragraphs) {
+    const norm = p.trim().substring(0, 200);
+    if (norm.length > 50 && seenP.has(norm)) continue;
+    if (norm.length > 50) seenP.add(norm);
+    filteredP.push(p);
+  }
+  cleaned = filteredP.join("\n\n");
+
+  const MAX_OUTPUT_CHARS = 35000;
+  if (cleaned.length > MAX_OUTPUT_CHARS) {
+    cleaned = cleaned.substring(0, MAX_OUTPUT_CHARS) + "\n\n*[Output truncated.]*";
+  }
+
+  return cleaned;
+}
+
+// ============ HANDLER ============
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -216,10 +328,13 @@ module.exports = async function handler(req, res) {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
+    console.error("[chat] Missing GEMINI_API_KEY");
     return res.status(500).json({
       error: { message: "GEMINI_API_KEY not set in Vercel environment variables." },
     });
   }
+
+  const startTime = Date.now();
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -236,7 +351,16 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: { message: "No messages provided" } });
     }
 
-    // Build conversation
+    console.log(`[chat] Request: mode=${mode} gen=${generator} fw=${fwFocus} chunks=${retrievedChunks.length} msgs=${messages.length}`);
+
+    let cleanedChunks = deduplicateChunks(retrievedChunks);
+    console.log(`[chat] After dedup: ${cleanedChunks.length} chunks`);
+
+    cleanedChunks = cleanedChunks.slice(0, 8);
+    cleanedChunks = trimContextToFit(cleanedChunks, MAX_TOTAL_CONTEXT_CHARS);
+    const totalCtxChars = cleanedChunks.reduce((s, c) => s + c.text.length, 0);
+    console.log(`[chat] Final context: ${cleanedChunks.length} chunks, ${totalCtxChars} chars`);
+
     const contents = messages.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
@@ -246,18 +370,22 @@ module.exports = async function handler(req, res) {
       mode,
       generator,
       organizationContext,
-      retrievedChunks,
+      retrievedChunks: cleanedChunks,
       fwFocus,
     });
+
+    const isLargeOutput = ["risk_register", "policy", "procedure", "gap", "audit_evidence", "mapping_doc"].includes(generator);
+    const config = {
+      maxOutputTokens: isLargeOutput ? 8192 : 4096,
+      temperature: isLargeOutput ? 0.3 : 0.5,
+      topP: 0.9,
+      topK: 40,
+    };
 
     const payload = JSON.stringify({
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents,
-      generationConfig: {
-        maxOutputTokens: 8192,
-        temperature: 0.4, // lower for factual GRC
-        topP: 0.95,
-      },
+      generationConfig: config,
       safetySettings: [
         { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -266,68 +394,108 @@ module.exports = async function handler(req, res) {
       ],
     });
 
-    // Try models in order with fallback
+    console.log(`[chat] Payload: ${(payload.length / 1024).toFixed(1)}KB`);
+
     let lastError = null;
-    for (const model of MODELS) {
-      try {
-        const result = await callGemini(model, apiKey, payload);
 
-        if (result.status === 200 && result.data.candidates) {
-          let text = "";
-          const parts = result.data.candidates[0]?.content?.parts || [];
-          for (const part of parts) {
-            if (part.text) text += part.text;
-          }
+    for (let modelIdx = 0; modelIdx < MODELS.length; modelIdx++) {
+      const model = MODELS[modelIdx];
+      const maxAttempts = modelIdx === 0 ? 2 : 1;
+      let attempt = 0;
 
-          if (!text) {
-            const finishReason = result.data.candidates[0]?.finishReason;
+      while (attempt < maxAttempts) {
+        attempt++;
+        try {
+          console.log(`[chat] Calling ${model} (attempt ${attempt}/${maxAttempts})`);
+          const callStart = Date.now();
+          const result = await callGemini(model, apiKey, payload);
+          const callDuration = Date.now() - callStart;
+          console.log(`[chat] ${model} responded in ${callDuration}ms with status ${result.status}`);
+
+          if (result.status === 200 && result.data.candidates) {
+            let text = "";
+            const parts = result.data.candidates[0]?.content?.parts || [];
+            for (const part of parts) {
+              if (part.text) text += part.text;
+            }
+
+            if (!text) {
+              const finishReason = result.data.candidates[0]?.finishReason;
+              console.warn(`[chat] Empty response from ${model}, reason: ${finishReason}`);
+              return res.status(200).json({
+                content: [{ type: "text", text: `The AI returned an empty response (reason: ${finishReason || "unknown"}). Please rephrase your question.` }],
+                modelUsed: model,
+                citations: [],
+              });
+            }
+
+            text = removeRepetition(text);
+
+            const citations = cleanedChunks.map((c) => ({
+              framework: c.framework,
+              title: c.title,
+              category: c.category,
+              doc_id: c.doc_id,
+            }));
+
+            const totalDuration = Date.now() - startTime;
+            console.log(`[chat] SUCCESS: ${model}, ${text.length} chars, ${totalDuration}ms`);
+
             return res.status(200).json({
-              content: [{ type: "text", text: `Response was blocked or empty (${finishReason}). Please rephrase.` }],
+              content: [{ type: "text", text }],
               modelUsed: model,
-              citations: [],
+              citations,
+              chunksUsed: cleanedChunks.length,
             });
           }
 
-          // Build citation list from used chunks
-          const citations = retrievedChunks.map((c) => ({
-            framework: c.framework,
-            title: c.title,
-            category: c.category,
-            doc_id: c.doc_id,
-          }));
+          const errMsg = result.data?.error?.message || `HTTP ${result.status}`;
+          console.warn(`[chat] ${model} error: ${errMsg}`);
 
-          return res.status(200).json({
-            content: [{ type: "text", text }],
-            modelUsed: model,
-            citations,
-            chunksUsed: retrievedChunks.length,
-          });
+          const isRetryable =
+            result.status === 503 ||
+            result.status === 429 ||
+            result.status === 500 ||
+            errMsg.toLowerCase().includes("overload") ||
+            errMsg.toLowerCase().includes("unavailable") ||
+            errMsg.toLowerCase().includes("high demand") ||
+            errMsg.toLowerCase().includes("rate");
+
+          lastError = { status: result.status, message: errMsg, model };
+
+          if (!isRetryable) {
+            console.error(`[chat] Hard error from ${model}: ${errMsg}`);
+            return res.status(result.status).json({
+              error: { message: `${model}: ${errMsg}` },
+              modelTried: model,
+            });
+          }
+
+          if (attempt < maxAttempts) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+            console.log(`[chat] Retrying after ${delay}ms`);
+            await new Promise((r) => setTimeout(r, delay));
+          }
+        } catch (err) {
+          console.error(`[chat] Exception in ${model}: ${err.message}`);
+          lastError = { status: 500, message: err.message, model };
+          if (attempt < maxAttempts) {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
         }
-
-        const errMsg = result.data?.error?.message || "Unknown error";
-        const isOverloaded =
-          result.status === 503 ||
-          errMsg.toLowerCase().includes("overload") ||
-          errMsg.toLowerCase().includes("unavailable") ||
-          errMsg.toLowerCase().includes("high demand");
-
-        lastError = { status: result.status, message: errMsg };
-
-        if (!isOverloaded) {
-          return res.status(result.status).json({ error: { message: errMsg } });
-        }
-        // else: try next model
-      } catch (err) {
-        lastError = { status: 500, message: err.message };
       }
+      console.log(`[chat] ${model} exhausted, falling through`);
     }
 
+    console.error(`[chat] ALL MODELS FAILED. Last error:`, lastError);
     return res.status(503).json({
       error: {
-        message: `All models unavailable. Last error: ${lastError?.message || "Unknown"}. Please try again shortly.`,
+        message: `All Gemini models unavailable. Last error: ${lastError?.message || "Unknown"} (${lastError?.model}). Please try again.`,
       },
+      lastError,
     });
   } catch (err) {
+    console.error(`[chat] Server error:`, err);
     return res.status(500).json({ error: { message: "Server error: " + err.message } });
   }
 };

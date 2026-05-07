@@ -501,21 +501,36 @@
       return;
     }
 
-    document.getElementById('fileProcessing').style.display = 'flex';
+    console.log(`[upload] Starting upload: ${file.name} (${(file.size/1024).toFixed(1)}KB)`);
+
+    const procEl = document.getElementById('fileProcessing');
     const procText = document.getElementById('procText');
+    procEl.style.display = 'flex';
+
+    // Hard timeout safety net — never leave the indicator visible forever
+    const safetyTimeout = setTimeout(() => {
+      console.warn('[upload] Safety timeout reached, hiding indicator');
+      procEl.style.display = 'none';
+    }, 60000);
 
     try {
+      console.log('[upload] Parsing file...');
       const result = await window.parsers.parseFile(file, (p) => {
         if (procText) procText.textContent = p.message || 'Processing...';
+        console.log(`[upload] Progress: ${p.stage} - ${p.message || ''}`);
       });
+
+      console.log(`[upload] Parsed: ${result.chunks.length} chunks`);
 
       // Add to retrieval index
       window.retrieval.addUserChunks(result.chunks);
+      console.log('[upload] Added to retrieval index');
 
       // Persist to IndexedDB
       await window.storage.saveDocument(result.metadata, result.chunks);
+      console.log('[upload] Saved to IndexedDB');
 
-      // If on chat-like page, attach to next message
+      // Attach to next message if on chat-like page
       if (['chat', 'mapping', 'policy', 'procedure', 'risk', 'audit', 'gap', 'upload'].includes(State.currentPage)) {
         State.attachedFiles.push({
           docId: result.metadata.doc_id,
@@ -530,15 +545,16 @@
 
       window.ui.toast(`Indexed ${result.chunks.length} chunks from ${file.name}`, 'success', 4000);
 
-      // Refresh upload page if visible
       if (State.currentPage === 'upload' || State.currentPage === 'knowledge') {
         renderPage();
       }
+      console.log('[upload] Complete');
     } catch (err) {
-      console.error('File upload failed:', err);
-      window.ui.toast('Failed: ' + err.message, 'error', 6000);
+      console.error('[upload] Failed:', err);
+      window.ui.toast('Failed: ' + (err.message || 'Unknown error'), 'error', 6000);
     } finally {
-      document.getElementById('fileProcessing').style.display = 'none';
+      clearTimeout(safetyTimeout);
+      procEl.style.display = 'none';
     }
   }
 
@@ -673,9 +689,16 @@
       content: m.content,
     }));
 
+    // Set up abort controller with 60s timeout (gives Gemini time to respond)
+    const abortController = new AbortController();
+    const fetchTimeout = setTimeout(() => abortController.abort(), 60000);
+
+    console.log('[chat] Sending request to /api/chat...');
+
     fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: abortController.signal,
       body: JSON.stringify({
         messages: apiMessages,
         retrievedChunks: retrievedChunks.map(c => ({
@@ -691,12 +714,16 @@
         fwFocus: State.currentFw === 'all' ? 'all' : window.sources.getFramework(State.currentFw)?.kbName,
       }),
     })
-      .then(r => r.json())
+      .then(r => {
+        clearTimeout(fetchTimeout);
+        return r.json();
+      })
       .then(data => {
         document.getElementById('typing')?.remove();
         State.busy = false;
 
         if (data.error) {
+          console.error('[chat] API error:', data.error);
           showError(data.error.message || 'API error');
           return;
         }
@@ -709,6 +736,8 @@
           showError('Empty response from AI');
           return;
         }
+
+        console.log(`[chat] Response: ${txt.length} chars from ${data.modelUsed}`);
 
         const citations = retrievedChunks.length > 0 ? retrievedChunks.map(c => ({
           framework: c.framework,
@@ -727,9 +756,15 @@
         scrollToBottom();
       })
       .catch(err => {
+        clearTimeout(fetchTimeout);
         document.getElementById('typing')?.remove();
         State.busy = false;
-        showError('Request failed: ' + (err.message || err));
+        console.error('[chat] Fetch error:', err);
+        if (err.name === 'AbortError') {
+          showError('Request timed out after 60 seconds. The AI may be overloaded — please try again.');
+        } else {
+          showError('Request failed: ' + (err.message || err));
+        }
       });
   }
 
@@ -753,7 +788,6 @@
 
     let citationsHtml = '';
     if (citations && citations.length > 0) {
-      // Dedupe by title+framework
       const unique = [];
       const seen = new Set();
       for (const c of citations) {
@@ -776,14 +810,85 @@
       `;
     }
 
+    // Export buttons - only show if response is substantial
+    const showExports = text && text.length > 200;
+    const hasTable = window.exporter && window.exporter.hasTable(text);
+    const exportsHtml = showExports ? `
+      <div class="export-bar">
+        <button class="export-btn" data-action="copy" title="Copy full output">
+          <svg width="13" height="13" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+        <button class="export-btn" data-action="word" title="Export to Word document">
+          <svg width="13" height="13" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Word
+        </button>
+        <button class="export-btn" data-action="pdf" title="Export to PDF">
+          <svg width="13" height="13" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          PDF
+        </button>
+        ${hasTable ? `
+          <button class="export-btn" data-action="excel" title="Export tables to Excel">
+            <svg width="13" height="13" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+            Excel
+          </button>
+        ` : ''}
+      </div>
+    ` : '';
+
+    const bubbleId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     row.innerHTML = `
-      <div class="bubble bot">
+      <div class="bubble bot" data-msg-id="${bubbleId}">
         <div class="msg-tag">GRC Expert ${modeTag} ${modelTag}</div>
         <div class="bot-content">${window.ui.renderMarkdown(text)}</div>
         ${citationsHtml}
+        ${exportsHtml}
       </div>
     `;
     document.getElementById('chatArea').appendChild(row);
+
+    // Wire export buttons
+    if (showExports) {
+      const bubble = row.querySelector('.bubble');
+      bubble._rawMarkdown = text; // store for export
+      bubble.querySelectorAll('[data-action]').forEach(btn => {
+        btn.addEventListener('click', () => handleExport(btn.dataset.action, text));
+      });
+    }
+  }
+
+  // ============ EXPORT HANDLER ============
+  async function handleExport(action, markdown) {
+    try {
+      if (!window.exporter) {
+        window.ui.toast('Export module not loaded', 'error');
+        return;
+      }
+
+      // Infer title from first heading
+      const title = window.exporter.inferTitle(markdown) || `GRC-${State.currentGenerator || 'Output'}-${new Date().toISOString().substring(0, 10)}`;
+
+      if (action === 'copy') {
+        const ok = await window.exporter.copyText(markdown);
+        if (ok) window.ui.toast('Copied to clipboard', 'success');
+        else window.ui.toast('Copy failed', 'error');
+      } else if (action === 'word') {
+        window.ui.toast('Generating Word document...', 'info', 2000);
+        const filename = await window.exporter.exportWord(markdown, title);
+        window.ui.toast(`Downloaded: ${filename}`, 'success');
+      } else if (action === 'pdf') {
+        window.ui.toast('Generating PDF...', 'info', 2000);
+        const filename = await window.exporter.exportPdf(markdown, title);
+        window.ui.toast(`Downloaded: ${filename}`, 'success');
+      } else if (action === 'excel') {
+        window.ui.toast('Generating Excel...', 'info', 2000);
+        const filename = await window.exporter.exportExcel(markdown, title);
+        window.ui.toast(`Downloaded: ${filename}`, 'success');
+      }
+    } catch (err) {
+      console.error('[export]', action, err);
+      window.ui.toast('Export failed: ' + err.message, 'error', 5000);
+    }
   }
 
   function showError(msg) {
