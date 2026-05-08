@@ -353,33 +353,36 @@
   // ============ PDF ============
 
   async function exportPdf(markdown, title) {
-    console.log('[export] PDF start — safe renderer v6');
+    console.log('[export] PDF start — universal safe renderer v12');
 
     if (!window.jspdf || !window.jspdf.jsPDF) {
       throw new Error('PDF library not loaded. Please refresh the page.');
     }
 
-    var JPDF = window.jspdf.jsPDF;
-    var doc = new JPDF({ unit: 'pt', format: 'a4' });
-    var pw = doc.internal.pageSize.width || 595.28;
-    var ph = doc.internal.pageSize.height || 841.89;
+    var doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a4' });
+    var pw = Number(doc.internal.pageSize.width) || 595.28;
+    var ph = Number(doc.internal.pageSize.height) || 841.89;
     var mg = 42;
-    var w = pw - mg * 2;
     var y = mg;
+    var contentWidth = pw - (mg * 2);
 
-    function cleanPdfText(value) {
+    function pdfString(value) {
       var s = strip(str(value));
-      // Remove control characters that can break jsPDF.text
+      s = s.replace(/\r/g, '\n');
       s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ');
-      // Normalize common markdown/reference noise
+      s = s.replace(/[\u2028\u2029]/g, ' ');
+      s = s.replace(/[-_]{20,}/g, '---');
       s = s.replace(/\s+/g, ' ').trim();
-      // Split very long unbroken tokens so jsPDF can wrap safely
-      s = s.replace(/([^\s]{70})(?=[^\s])/g, '$1 ');
+      // Break long unbroken strings such as URLs, hashes, or markdown separators.
+      s = s.replace(/([^\s]{60})(?=[^\s])/g, '$1 ');
+      // jsPDF can fail on some unsupported surrogate pairs/emojis. Remove only those.
+      s = s.replace(/[\uD800-\uDFFF]/g, '');
       return s;
     }
 
-    function ensurePage(height) {
-      var h = (typeof height === 'number' && isFinite(height) && height > 0) ? height : 16;
+    function ensurePage(extraHeight) {
+      var h = Number(extraHeight);
+      if (!isFinite(h) || h < 1) h = 14;
       if (!isFinite(y) || y < mg) y = mg;
       if (y + h > ph - mg) {
         doc.addPage();
@@ -387,35 +390,61 @@
       }
     }
 
-    function drawText(value, x, opts) {
-      var text = cleanPdfText(value);
-      if (!text) return;
-      var left = (typeof x === 'number' && isFinite(x)) ? x : mg;
-      var maxWidth = Math.max(40, pw - left - mg);
-      var lines;
+    function safeTextLine(text, x, yy) {
+      var s = pdfString(text);
+      var xx = Number(x);
+      var yyy = Number(yy);
+      if (!s || !isFinite(xx) || !isFinite(yyy)) return;
       try {
-        lines = doc.splitTextToSize(text, maxWidth);
-      } catch (_) {
-        lines = [text.substring(0, 500)];
-      }
-      if (!Array.isArray(lines)) lines = [text];
-      var lineHeight = (opts && opts.lineHeight) || 14;
-      for (var i = 0; i < lines.length; i++) {
-        var line = cleanPdfText(lines[i]);
-        if (!line) continue;
-        ensurePage(lineHeight + 2);
+        // Always use the simplest jsPDF.text signature. Never pass arrays/options here.
+        doc.text(String(s), xx, yyy);
+      } catch (e1) {
         try {
-          // Use the simplest jsPDF.text signature only: text, x, y.
-          // This avoids the common "Invalid arguments passed to jsPDF.text" failure.
-          doc.text(String(line), Number(left), Number(y));
-        } catch (err) {
-          console.warn('[export] skipped unsafe PDF text line:', err.message, line.substring(0, 80));
+          // Last-resort fallback for characters that jsPDF cannot encode.
+          doc.text(String(s).replace(/[^\x20-\x7E]/g, ' '), xx, yyy);
+        } catch (e2) {
+          console.warn('[export] skipped unsafe PDF text:', e1.message, String(s).slice(0, 80));
         }
+      }
+    }
+
+    function splitLines(text, width) {
+      var s = pdfString(text);
+      if (!s) return [];
+      var safeWidth = Math.max(80, Number(width) || contentWidth);
+      try {
+        var out = doc.splitTextToSize(s, safeWidth);
+        if (Array.isArray(out)) return out.map(pdfString).filter(Boolean);
+        return [pdfString(out)];
+      } catch (_) {
+        var chunks = [];
+        for (var i = 0; i < s.length; i += 95) chunks.push(s.slice(i, i + 95));
+        return chunks;
+      }
+    }
+
+    function write(text, opts) {
+      opts = opts || {};
+      var x = isFinite(Number(opts.x)) ? Number(opts.x) : mg;
+      var font = opts.font || 'normal';
+      var size = Number(opts.size) || 10;
+      var lineHeight = Number(opts.lineHeight) || Math.max(12, size + 3);
+      var width = Number(opts.width) || (pw - x - mg);
+      var color = opts.color || [0, 0, 0];
+
+      doc.setFont('helvetica', font);
+      doc.setFontSize(size);
+      try { doc.setTextColor(color[0], color[1], color[2]); } catch (_) { doc.setTextColor(0,0,0); }
+
+      var lines = splitLines(text, width);
+      for (var i = 0; i < lines.length; i++) {
+        ensurePage(lineHeight + 2);
+        safeTextLine(lines[i], x, y);
         y += lineHeight;
       }
     }
 
-    function drawRule() {
+    function rule() {
       ensurePage(12);
       try {
         doc.setDrawColor(220, 230, 240);
@@ -424,156 +453,88 @@
       y += 12;
     }
 
-    function drawKeyValue(label, value) {
-      var v = cleanPdfText(value);
+    function keyValue(label, value) {
+      var v = pdfString(value);
       if (!v) return;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9.5);
-      drawText(label + ':', mg, { lineHeight: 12 });
-      y -= 12;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9.5);
-      drawText(v, mg + 115, { lineHeight: 12 });
-      y += 3;
+      var startY = y;
+      write(label + ':', { x: mg, width: 115, size: 8.8, font: 'bold', lineHeight: 11 });
+      y = startY;
+      write(v, { x: mg + 120, width: pw - (mg + 120) - mg, size: 8.8, font: 'normal', lineHeight: 11 });
+      y += 2;
     }
 
-    function isLargeRiskRegisterTable(tbl) {
-      var headers = (tbl.headers || []).map(function (h) { return cleanPdfText(h).toLowerCase(); });
-      return headers.length >= 10 && (headers.indexOf('risk identifier') !== -1 || headers.indexOf('description of the risk') !== -1);
-    }
-
-    function renderTableAsCards(tbl) {
-      var headers = (tbl.headers || []).map(cleanPdfText);
+    function tableAsCards(tbl) {
+      var headers = (tbl.headers || []).map(pdfString);
       var rows = tbl.rows || [];
       if (!headers.length) return;
 
-      if (isLargeRiskRegisterTable(tbl)) {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(12);
-        drawText('Risk Register', mg, { lineHeight: 16 });
-        y += 4;
+      for (var r = 0; r < rows.length; r++) {
+        ensurePage(55);
+        try {
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(225, 232, 240);
+          doc.roundedRect(mg, y, contentWidth, 20, 4, 4, 'FD');
+        } catch (_) {}
+        write('Row ' + (r + 1), { x: mg + 8, width: contentWidth - 16, size: 9.5, font: 'bold', lineHeight: 12 });
+        y += 2;
 
-        for (var r = 0; r < rows.length; r++) {
-          ensurePage(90);
-          try {
-            doc.setFillColor(248, 250, 252);
-            doc.setDrawColor(210, 220, 230);
-            doc.roundedRect(mg, y, w, 22, 4, 4, 'FD');
-          } catch (_) {}
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(10.5);
-          drawText('Risk ' + (r + 1) + ' — ' + cleanPdfText(rows[r][0] || ''), mg + 8, { lineHeight: 13 });
-          y += 3;
-
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(8.5);
-          for (var c = 1; c < headers.length; c++) {
-            var cell = cleanPdfText(rows[r][c]);
-            if (!cell) continue;
-            // Keep PDF readable by prioritizing important fields and shortening lower-value fields.
-            var important = /risk area|owner|description|cause|threat|consequences|likelihood|impact|rating|treatment|deadline|residual|status|comment/i.test(headers[c]);
-            if (!important && c > 8) continue;
-            if (cell.length > 180) cell = cell.substring(0, 177) + '...';
-            drawKeyValue(headers[c], cell);
-          }
-          y += 8;
+        for (var c = 0; c < headers.length; c++) {
+          var cell = pdfString(rows[r] && rows[r][c]);
+          if (!cell) continue;
+          if (cell.length > 420) cell = cell.slice(0, 417) + '...';
+          keyValue(headers[c] || ('Column ' + (c + 1)), cell);
         }
-        return;
-      }
-
-      // Generic table: render compactly as key/value blocks instead of wide tables.
-      for (var rr = 0; rr < rows.length; rr++) {
-        ensurePage(40);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9.5);
-        drawText('Row ' + (rr + 1), mg, { lineHeight: 12 });
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8.8);
-        for (var cc = 0; cc < headers.length; cc++) {
-          drawKeyValue(headers[cc] || ('Column ' + (cc + 1)), rows[rr][cc]);
-        }
-        y += 6;
+        y += 7;
       }
     }
 
     try {
-      // Title
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(20);
-      doc.setTextColor(14, 165, 233);
-      drawText(title || inferTitle(markdown) || 'GRC Expert Output', mg, { lineHeight: 24 });
-      y += 8;
-      doc.setTextColor(0, 0, 0);
-      drawRule();
+      var safeTitle = title || inferTitle(markdown) || 'GRC Expert Output';
+      write(safeTitle, { size: 19, font: 'bold', lineHeight: 23, color: [14, 165, 233] });
+      y += 6;
+      rule();
 
-      var blocks = parse(markdown);
-
+      var blocks = parse(normalizeMarkdownTables(markdown));
       for (var bi = 0; bi < blocks.length; bi++) {
-        var b = blocks[bi];
-
-        if (b.type === 'h1' || b.type === 'h2' || b.type === 'h3' || b.type === 'h4') {
-          var sizeMap = { h1: 17, h2: 14, h3: 12, h4: 11 };
-          var lhMap = { h1: 21, h2: 18, h3: 16, h4: 15 };
-          y += 6;
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(sizeMap[b.type]);
-          if (b.type === 'h1' || b.type === 'h2') doc.setTextColor(14, 165, 233);
-          drawText(b.text, mg, { lineHeight: lhMap[b.type] });
-          doc.setTextColor(0, 0, 0);
-          y += 3;
+        var b = blocks[bi] || {};
+        if (b.type === 'h1') {
+          y += 5; write(b.text, { size: 16, font: 'bold', lineHeight: 20, color: [14, 165, 233] }); y += 2;
+        } else if (b.type === 'h2') {
+          y += 5; write(b.text, { size: 14, font: 'bold', lineHeight: 18, color: [14, 165, 233] }); y += 2;
+        } else if (b.type === 'h3' || b.type === 'h4') {
+          y += 4; write(b.text, { size: 12, font: 'bold', lineHeight: 16 }); y += 2;
         } else if (b.type === 'p') {
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(10.2);
-          drawText(b.text, mg, { lineHeight: 14 });
-          y += 4;
+          write(b.text, { size: 10, lineHeight: 14 }); y += 3;
         } else if (b.type === 'ul' || b.type === 'ol') {
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(10);
           var items = b.items || [];
           for (var ii = 0; ii < items.length; ii++) {
-            var prefix = (b.type === 'ol') ? (ii + 1) + '. ' : '- ';
-            drawText(prefix + items[ii], mg + 10, { lineHeight: 13 });
+            var prefix = b.type === 'ol' ? (ii + 1) + '. ' : '- ';
+            write(prefix + items[ii], { x: mg + 10, width: contentWidth - 10, size: 9.8, lineHeight: 13 });
           }
-          y += 4;
+          y += 3;
         } else if (b.type === 'table') {
-          renderTableAsCards(b);
-          y += 4;
+          tableAsCards(b); y += 4;
         } else if (b.type === 'code') {
-          doc.setFont('courier', 'normal');
-          doc.setFontSize(8.5);
-          var codeLines = str(b.text).split('\n');
-          for (var ci = 0; ci < codeLines.length; ci++) drawText(codeLines[ci], mg, { lineHeight: 11 });
-          y += 5;
+          write(b.text, { size: 8.5, font: 'normal', lineHeight: 11 }); y += 4;
         } else if (b.type === 'quote') {
-          doc.setFont('helvetica', 'italic');
-          doc.setFontSize(9.8);
-          drawText(b.text, mg + 16, { lineHeight: 13 });
-          y += 4;
+          write(b.text, { x: mg + 14, width: contentWidth - 14, size: 9.5, font: 'italic', lineHeight: 13 }); y += 3;
         }
       }
 
       var totalPages = doc.internal.getNumberOfPages();
       for (var p = 1; p <= totalPages; p++) {
         doc.setPage(p);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        doc.setTextColor(150, 150, 150);
-        try { doc.text('GRC Expert can make mistakes · Page ' + p + '/' + totalPages, mg, ph - 20); } catch (_) {}
+        safeTextLine('GRC Expert can make mistakes. Verify important compliance and security decisions. Page ' + p + '/' + totalPages, mg, ph - 20);
       }
 
-      var fn = safeName(title || inferTitle(markdown) || 'GRC-Document') + '.pdf';
-      try {
-        doc.save(fn);
-      } catch (saveErr) {
-        console.warn('[export] doc.save fallback:', saveErr.message);
-        var blob = doc.output('blob');
-        download(blob, fn);
-      }
+      var fn = safeName(safeTitle) + '.pdf';
+      try { doc.save(fn); }
+      catch (saveErr) { download(doc.output('blob'), fn); }
       console.log('[export] PDF done: ' + fn);
       return fn;
     } catch (err) {
-      console.error('[export] safe PDF renderer failed:', err);
-      throw new Error('PDF export failed safely. Please try Word export for very large tables. Details: ' + err.message);
+      console.error('[export] universal PDF renderer failed:', err);
+      throw new Error('PDF export failed: ' + (err && err.message ? err.message : 'Unknown PDF error'));
     }
   }
 
