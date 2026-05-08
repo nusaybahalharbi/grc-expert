@@ -15,7 +15,7 @@ Built by Nusaybah AlHarbi · Powered by Google Gemini
 - ✅ **Fixed "Processing file..." stuck issue** — safety timeout + bulletproof try/finally
 - ✅ **Comprehensive logging** — every step logged to console for debugging
 - ✅ **Retry logic** — main model retries once before falling back
-- ✅ **Timeout handling** — 25s API timeout, 60s frontend timeout with abort
+- ✅ **Timeout handling** — 120s Gemini server timeout, 150s frontend timeout with abort, retry logic, and loading progress updates
 
 ### NEW: Export & Copy Features
 Every AI response now includes export buttons:
@@ -128,7 +128,7 @@ After deployment, verify:
 6. **Word export** downloads `.docx` with proper formatting
 7. **PDF export** downloads `.pdf` with formatted tables
 8. **Excel export** appears only when response has tables, downloads `.xlsx`
-9. **No "stuck processing"** — file upload completes or shows error within 60s
+9. **No "stuck processing"** — file upload completes or shows error within 60s; AI generation has extended 150s timeout with progress updates
 10. **No repeated text** in policies/risk registers
 
 ---

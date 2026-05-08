@@ -689,9 +689,31 @@
       content: m.content,
     }));
 
-    // Set up abort controller with 60s timeout (gives Gemini time to respond)
+    // Set up abort controller with extended timeout for Gemini 2.5 Flash long generations
+    const CLIENT_TIMEOUT_MS = 150000;
     const abortController = new AbortController();
-    const fetchTimeout = setTimeout(() => abortController.abort(), 60000);
+    const fetchTimeout = setTimeout(() => abortController.abort(), CLIENT_TIMEOUT_MS);
+
+    const progressSteps = [
+      'analyzing your query...',
+      'retrieving relevant controls...',
+      'building the response...',
+      'still working on a longer answer...',
+      'finalizing the output...'
+    ];
+    let progressIndex = 0;
+    const progressTimer = setInterval(() => {
+      progressIndex = Math.min(progressIndex + 1, progressSteps.length - 1);
+      const label = document.querySelector('#typing .msg-model');
+      if (label) label.textContent = progressSteps[progressIndex];
+    }, 15000);
+
+    const cleanupLoading = () => {
+      clearTimeout(fetchTimeout);
+      clearInterval(progressTimer);
+      document.getElementById('typing')?.remove();
+      State.busy = false;
+    };
 
     console.log('[chat] Sending request to /api/chat...');
 
@@ -714,13 +736,13 @@
         fwFocus: State.currentFw === 'all' ? 'all' : window.sources.getFramework(State.currentFw)?.kbName,
       }),
     })
-      .then(r => {
-        clearTimeout(fetchTimeout);
-        return r.json();
+      .then(async r => {
+        const data = await r.json().catch(() => ({ error: { message: 'Invalid response from server' } }));
+        if (!r.ok && !data.error) data.error = { message: `Server returned HTTP ${r.status}` };
+        return data;
       })
       .then(data => {
-        document.getElementById('typing')?.remove();
-        State.busy = false;
+        cleanupLoading();
 
         if (data.error) {
           console.error('[chat] API error:', data.error);
@@ -739,11 +761,7 @@
 
         console.log(`[chat] Response: ${txt.length} chars from ${data.modelUsed}`);
 
-        const citations = retrievedChunks.length > 0 ? retrievedChunks.map(c => ({
-          framework: c.framework,
-          title: c.title,
-          category: c.category,
-        })) : [];
+        const citations = Array.isArray(data.citations) ? data.citations : [];
 
         State.messages.push({
           role: 'assistant',
@@ -756,12 +774,10 @@
         scrollToBottom();
       })
       .catch(err => {
-        clearTimeout(fetchTimeout);
-        document.getElementById('typing')?.remove();
-        State.busy = false;
+        cleanupLoading();
         console.error('[chat] Fetch error:', err);
         if (err.name === 'AbortError') {
-          showError('Request timed out after 60 seconds. The AI may be overloaded — please try again.');
+          showError('Request timed out after 150 seconds. The AI may be generating a long response or Gemini may be overloaded — please try again with a shorter request or split it into sections.');
         } else {
           showError('Request failed: ' + (err.message || err));
         }

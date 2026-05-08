@@ -17,7 +17,9 @@ const https = require("https");
 // ONLY supported models in 2026
 const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
-const REQUEST_TIMEOUT_MS = 25000;
+const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 120000);
+const SERVER_TIME_BUDGET_MS = Number(process.env.SERVER_TIME_BUDGET_MS || 115000);
+const RETRY_BASE_DELAY_MS = 1200;
 const MAX_CHUNK_TEXT_CHARS = 1500;
 const MAX_TOTAL_CONTEXT_CHARS = 18000;
 
@@ -268,7 +270,7 @@ function buildSystemPrompt({ mode, generator, organizationContext, retrievedChun
 
 // ============ GEMINI CALL ============
 
-function callGemini(modelName, apiKey, payload) {
+function callGemini(modelName, apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const path = `/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     const options = {
@@ -280,7 +282,7 @@ function callGemini(modelName, apiKey, payload) {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(payload),
       },
-      timeout: REQUEST_TIMEOUT_MS,
+      timeout: timeoutMs,
     };
 
     const req = https.request(options, (res) => {
@@ -298,7 +300,7 @@ function callGemini(modelName, apiKey, payload) {
     req.on("error", (err) => reject(err));
     req.on("timeout", () => {
       req.destroy();
-      reject(new Error(`Timeout calling ${modelName} after ${REQUEST_TIMEOUT_MS}ms`));
+      reject(new Error(`Timeout calling ${modelName} after ${timeoutMs}ms`));
     });
 
     req.write(payload);
@@ -384,7 +386,7 @@ function extractUsedCitations(text, chunks) {
 
 // ============ HANDLER ============
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -468,15 +470,24 @@ module.exports = async function handler(req, res) {
 
     for (let modelIdx = 0; modelIdx < MODELS.length; modelIdx++) {
       const model = MODELS[modelIdx];
-      const maxAttempts = modelIdx === 0 ? 2 : 1;
+      const maxAttempts = modelIdx === 0 ? 3 : 2;
       let attempt = 0;
 
       while (attempt < maxAttempts) {
         attempt++;
+        const elapsed = Date.now() - startTime;
+        const remainingBudget = SERVER_TIME_BUDGET_MS - elapsed;
+        if (remainingBudget < 8000) {
+          console.warn(`[chat] Server time budget nearly exhausted before ${model} attempt ${attempt}.`);
+          break;
+        }
+
+        const attemptTimeoutMs = Math.max(8000, Math.min(REQUEST_TIMEOUT_MS, remainingBudget - 3000));
+
         try {
-          console.log(`[chat] Calling ${model} (attempt ${attempt}/${maxAttempts})`);
+          console.log(`[chat] Calling ${model} (attempt ${attempt}/${maxAttempts}, timeout=${attemptTimeoutMs}ms)`);
           const callStart = Date.now();
-          const result = await callGemini(model, apiKey, payload);
+          const result = await callGemini(model, apiKey, payload, attemptTimeoutMs);
           const callDuration = Date.now() - callStart;
           console.log(`[chat] ${model} responded in ${callDuration}ms with status ${result.status}`);
 
@@ -534,16 +545,17 @@ module.exports = async function handler(req, res) {
             });
           }
 
-          if (attempt < maxAttempts) {
-            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 4000);
+          if (attempt < maxAttempts && (Date.now() - startTime) < SERVER_TIME_BUDGET_MS - 8000) {
+            const delay = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1), 5000);
             console.log(`[chat] Retrying after ${delay}ms`);
             await new Promise((r) => setTimeout(r, delay));
           }
         } catch (err) {
           console.error(`[chat] Exception in ${model}: ${err.message}`);
           lastError = { status: 500, message: err.message, model };
-          if (attempt < maxAttempts) {
-            await new Promise((r) => setTimeout(r, 1000));
+          if (attempt < maxAttempts && (Date.now() - startTime) < SERVER_TIME_BUDGET_MS - 8000) {
+            const delay = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1), 5000);
+            await new Promise((r) => setTimeout(r, delay));
           }
         }
       }
@@ -561,4 +573,9 @@ module.exports = async function handler(req, res) {
     console.error(`[chat] Server error:`, err);
     return res.status(500).json({ error: { message: "Server error: " + err.message } });
   }
+}
+
+module.exports = handler;
+module.exports.config = {
+  maxDuration: 120,
 };

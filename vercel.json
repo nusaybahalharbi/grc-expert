@@ -4,15 +4,29 @@
     {
       "source": "/data/kb.json",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=86400, s-maxage=86400" },
-        { "key": "Content-Type", "value": "application/json" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=86400, s-maxage=86400"
+        },
+        {
+          "key": "Content-Type",
+          "value": "application/json"
+        }
       ]
     },
     {
       "source": "/app/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=3600" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600"
+        }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/chat.js": {
+      "maxDuration": 120
+    }
+  }
 }
