@@ -791,7 +791,7 @@
       const unique = [];
       const seen = new Set();
       for (const c of citations) {
-        const key = `${c.framework}|${c.title}`;
+        const key = `${c.ref || ""}|${c.framework}|${c.title}`;
         if (!seen.has(key)) {
           seen.add(key);
           unique.push(c);
@@ -799,11 +799,11 @@
       }
       citationsHtml = `
         <div class="citations">
-          <div class="citations-label">Sources Referenced</div>
+          <div class="citations-label">Sources Used</div>
           ${unique.slice(0, 8).map(c => `
             <span class="citation-chip" title="${window.ui.escapeHtml(c.category)}">
               <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              ${window.ui.escapeHtml(c.framework)} · ${window.ui.escapeHtml(c.title.substring(0, 40))}${c.title.length > 40 ? '…' : ''}
+              ${window.ui.escapeHtml(c.ref ? c.ref + " · " : "")}${window.ui.escapeHtml(c.framework)} · ${window.ui.escapeHtml(c.title.substring(0, 40))}${c.title.length > 40 ? '…' : ''}
             </span>
           `).join('')}
         </div>

@@ -152,3 +152,14 @@ Every operation now logs detailed info:
 Built by **Nusaybah AlHarbi** — Cybersecurity GRC Specialist
 Powered by **Google Gemini 2.5**
 NCA, SAMA, CST, SDAIA framework content from official Saudi regulatory sources.
+
+## Security Hardening Update
+
+Applied production-oriented safeguards:
+- Added explicit prompt-injection and jailbreak resistance rules.
+- Blocked disclosure of system prompts, hidden instructions, backend details, API keys, and internal configuration.
+- Treated uploaded files and retrieved context as untrusted data that cannot override system behavior.
+- Strengthened compliance-safety wording to prevent fake evidence, false attestations, or unsupported claims of compliance/certification/audit readiness.
+- Added stricter citation behavior: only references actually used in the answer should appear as sources.
+- Updated source label from “Sources Referenced” to “Sources Used”.
+- Added UI disclaimer: “GRC Expert can make mistakes. Verify important compliance and security decisions.”
