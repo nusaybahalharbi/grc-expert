@@ -1,6 +1,5 @@
 /**
- * GRC Expert — Post-Init
- * Runs last after all scripts. Configures PDF.js, verifies libraries.
+ * GRC Expert — Post-Init (runs last)
  */
 (function () {
   'use strict';
@@ -8,28 +7,34 @@
   // PDF.js worker
   if (window.pdfjsLib) {
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    console.log('[init] ✓ PDF.js configured');
+    console.log('[init] ✓ PDF.js');
   } else {
-    console.warn('[init] ✗ PDF.js not loaded');
+    console.warn('[init] ✗ PDF.js');
   }
 
-  // Verify export libraries
-  console.log('[init] Library check:');
-  console.log('[init]   XLSX:', !!window.XLSX ? '✓ loaded' : '✗ MISSING');
-  console.log('[init]   mammoth:', !!window.mammoth ? '✓ loaded' : '✗ MISSING');
-  console.log('[init]   docx:', !!window.docx ? '✓ loaded' : '✗ MISSING');
-  if (window.docx) {
-    console.log('[init]   docx.Document:', !!window.docx.Document);
-    console.log('[init]   docx.Packer:', !!window.docx.Packer);
-    console.log('[init]   docx.Paragraph:', !!window.docx.Paragraph);
-  }
-  console.log('[init]   jspdf:', !!(window.jspdf && window.jspdf.jsPDF) ? '✓ loaded' : '✗ MISSING');
+  // Verify all export libraries
+  var checks = [
+    ['XLSX (Excel)', !!window.XLSX],
+    ['mammoth (Word read)', !!window.mammoth],
+    ['docx (Word export)', !!(window.docx && window.docx.Document && window.docx.Packer)],
+    ['jsPDF (PDF export)', !!(window.jspdf && window.jspdf.jsPDF)],
+  ];
+
+  checks.forEach(function (c) {
+    console.log('[init] ' + (c[1] ? '✓' : '✗') + ' ' + c[0]);
+  });
+
+  // Test autoTable
   if (window.jspdf && window.jspdf.jsPDF) {
-    var testDoc = new window.jspdf.jsPDF();
-    console.log('[init]   autoTable:', typeof testDoc.autoTable === 'function' ? '✓ loaded' : '✗ MISSING');
+    try {
+      var t = new window.jspdf.jsPDF();
+      console.log('[init] ' + (typeof t.autoTable === 'function' ? '✓' : '✗') + ' jspdf-autotable');
+    } catch (e) {
+      console.warn('[init] ✗ jspdf-autotable (error)');
+    }
   }
 
-  // Sidebar framework toggle
+  // Sidebar toggle
   var fwToggle = document.getElementById('fwToggle');
   var fwList = document.getElementById('fwList');
   if (fwToggle && fwList) {

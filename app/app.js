@@ -810,9 +810,15 @@
       `;
     }
 
-    // Export buttons - only show if response is substantial
+    // Export buttons - conditional by generator type
     const showExports = text && text.length > 200;
     const hasTable = window.exporter && window.exporter.hasTable(text);
+    // Excel only for tabular generators (risk registers, gap assessments, audit evidence, mappings, KPIs)
+    const tabularGenerators = ['risk_register', 'audit_evidence', 'gap', 'mapping', 'mapping_doc'];
+    const isTabularOutput = tabularGenerators.includes(State.currentGenerator) && hasTable;
+    // Also show Excel for general chat if tables are present and generator is null
+    const showExcel = isTabularOutput || (!State.currentGenerator && hasTable);
+
     const exportsHtml = showExports ? `
       <div class="export-bar">
         <button class="export-btn" data-action="copy" title="Copy full output">
@@ -827,7 +833,7 @@
           <svg width="13" height="13" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           PDF
         </button>
-        ${hasTable ? `
+        ${showExcel ? `
           <button class="export-btn" data-action="excel" title="Export tables to Excel">
             <svg width="13" height="13" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
             Excel
