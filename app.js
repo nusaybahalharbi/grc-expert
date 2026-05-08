@@ -273,7 +273,7 @@
       mapping: { title: 'Framework Mapping', sub: 'Compare and cross-reference controls between frameworks. Get accurate mappings between NCA, ISO, NIST, and more.' },
       policy: { title: 'Policy Generator', sub: 'Generate complete, professional policies aligned with NCA Toolkit, ISO 27001, and other frameworks. Customize for your organization.' },
       procedure: { title: 'Procedure Generator', sub: 'Generate executable procedures with roles, steps, inputs, outputs, and evidence requirements.' },
-      risk: { title: 'Risk Register Generator', sub: 'Generate risk registers following ISO 31000 and NCA Risk Management methodology with full risk treatment plans.' },
+      risk: { title: 'Risk Register Generator', sub: 'Generate risk registers following the NCA cybersecurity risk register template structure with full treatment plans.' },
       audit: { title: 'Audit Evidence Builder', sub: 'Generate evidence request lists, audit interview questions, and finding response templates.' },
       gap: { title: 'Gap Assessment', sub: 'Conduct compliance gap analysis with severity ratings, remediation plans, and roadmaps.' },
     };

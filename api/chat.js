@@ -145,25 +145,67 @@ Generate ONE procedure. Each section EXACTLY ONCE:
 ## 10. Review and Update`,
 
   risk_register: `MODE: Risk Register Generation
-Output a complete risk register as a markdown table with EXACTLY these columns in this order:
+Generate a risk register using the NCA Cybersecurity Risk Management Template structure. The template is a STRUCTURE reference only. Do NOT copy the sample risks from the template. Create new risks based on the user's requested scope, sector, asset, and scenario.
 
-| Risk ID | Risk Title | Risk Description | Asset/Process | Threat | Vulnerability | Existing Controls | Likelihood (1-5) | Impact (1-5) | Inherent Risk (LxI) | Risk Treatment | Treatment Actions | Owner | Target Date | Residual Risk | Status |
+FIRST: Add a cover page section before the register:
+# Cybersecurity Risk Register
 
-Generate 15-25 UNIQUE risk entries. Risk IDs: R-001, R-002, etc. Each row must be different.
+**Document Information**
+| Field | Value |
+|---|---|
+| Organization | [Organization Name] |
+| Sector | [e.g., Saudi Bank / Government Entity / Telecom / Cloud Provider] |
+| Scope | [User's requested scope] |
+| Classification | Confidential |
+| Version | 1.0 |
+| Date | [Current Date] |
+| Prepared By | Cybersecurity / GRC Function |
+| Approved By | [Senior Management / Risk Committee] |
 
-After the table, add THREE sections (each appears once):
+SECOND: Output the risk register as ONE markdown table with EXACTLY these NCA template columns in this exact order:
+
+| Risk identifier | Risk area (scope of risk) | Risk owner | Date of risk identification | Description of the risk | Risk cause | Threat | Risk analysis and consequences | Date of risk analysis and evaluation | Inherent risk likelihood (1-5) | Inherent risk magnitude/impact (1-5) | Overall inherent risk rating | Updated overall inherent risk rating (manual override) | Type of treatment action | Risk treatment description | Owner of the treatment action | Deadline for action | Residual risk description | Residual risk likelihood (1-5) | Residual risk magnitude/impact (1-5) | Overall residual risk rating | Following steps description | Last evaluation date | Comment |
+
+RISK GENERATION RULES:
+- Generate the exact number requested by the user. If no number is requested, generate 15 risks.
+- Each risk must be unique and tailored to the requested topic. Do NOT reuse generic risk rows.
+- Risk identifiers must be numeric or scoped IDs such as 1, 2, 3 or APP-001, APP-002 if the user requests a specific domain.
+- Use the user's requested domain as the main driver. Example: application development risks must include SSDLC, insecure coding, weak authentication, API exposure, secrets leakage, CI/CD compromise, dependency vulnerabilities, environment segregation, inadequate testing, change control, logging gaps, data leakage, cloud configuration, mobile/web app risks, and third-party/component risk.
+- Do NOT generate the same register for every request. The risks, causes, threats, owners, treatment descriptions, and residual risks must change based on scope.
+- Keep cells concise so PDF/Word export does not break. No cell should exceed 35 words unless necessary.
+- Use compact markdown table separators only: |---|---|. NEVER create long dashed separator lines.
+
+RATING RULES:
+- Likelihood and impact must be numeric values from 1 to 5.
+- Overall inherent risk rating must be derived from likelihood × impact:
+  - Very Low = 1-3
+  - Low = 4-6
+  - Medium = 7-10
+  - High = 11-16
+  - Critical = 17-25
+- Residual ratings must be lower than or equal to inherent ratings unless treatment is not started.
+- Type of treatment action must be one of: Risk Mitigation, Risk Avoidance, Risk Transfer, Risk Acceptance.
+
+CONTROL / FRAMEWORK RULES:
+- Do NOT invent NCA, SAMA, ISO, SOC 2, or PCI control IDs.
+- If the user asks for control mapping and exact IDs are not retrieved, write: To be validated.
+- For banking outputs, mention SAMA and NCA as framework areas only unless exact IDs are retrieved.
+
+After the table, add these sections once:
 
 ## Risk Methodology
-- Likelihood: 1=Rare, 2=Unlikely, 3=Possible, 4=Likely, 5=Almost Certain
-- Impact: 1=Insignificant, 2=Minor, 3=Moderate, 4=Major, 5=Catastrophic
-- Inherent Risk = L × I (1-25)
-- Levels: Low (1-4), Medium (5-9), High (10-15), Critical (16-25)
+Explain the scoring scale and treatment approach in concise bullets.
 
-## Top Risks [Top 5 by score, listed once]
+## Top 5 Risks
+List the top 5 risks by inherent rating.
 
-## Treatment Summary [Avoid/Reduce/Transfer/Accept counts]
+## Treatment Summary
+Summarize the count of Risk Mitigation / Risk Avoidance / Risk Transfer / Risk Acceptance.
 
-CRITICAL: NO duplicate rows. STOP at 25 entries.`,
+## Assumptions
+List assumptions used to generate the register.
+
+CRITICAL: The NCA template defines the columns and methodology. The content must be newly generated and customized to the user's requested scenario.`,
 
   audit_evidence: `MODE: Audit Evidence Builder
 ONE table:

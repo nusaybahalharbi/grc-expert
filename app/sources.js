@@ -51,7 +51,7 @@
   const GENERATORS = [
     { id: 'policy', name: 'Policy Generator', icon: 'doc', desc: 'Generate policies aligned with frameworks', generator: 'policy' },
     { id: 'procedure', name: 'Procedure Generator', icon: 'list', desc: 'Generate executable procedures', generator: 'procedure' },
-    { id: 'risk_register', name: 'Risk Register', icon: 'alert', desc: 'Generate risk registers (ISO 31000)', generator: 'risk_register' },
+    { id: 'risk_register', name: 'Risk Register', icon: 'alert', desc: 'Generate risk registers using NCA risk register template structure', generator: 'risk_register' },
     { id: 'audit_evidence', name: 'Audit Evidence Builder', icon: 'check', desc: 'Generate evidence request lists', generator: 'audit_evidence' },
     { id: 'gap', name: 'Gap Assessment', icon: 'gap', desc: 'Compliance gap analysis', generator: 'gap' },
     { id: 'mapping_doc', name: 'Mapping Document', icon: 'link', desc: 'Detailed framework mapping', generator: 'mapping_doc' },
@@ -64,7 +64,7 @@
     mapping: { title: 'Framework Mapping', desc: 'Compare and cross-reference controls between frameworks.' },
     policy: { title: 'Policy Generator', desc: 'Generate professional policies aligned with NCA toolkit, ISO 27001, and other frameworks.' },
     procedure: { title: 'Procedure Generator', desc: 'Generate executable procedures with roles, steps, and evidence requirements.' },
-    risk: { title: 'Risk Register Generator', desc: 'Generate risk registers following ISO 31000 and NCA Risk Management methodology.' },
+    risk: { title: 'Risk Register Generator', desc: 'Generate risk registers following the NCA cybersecurity risk register template and risk treatment methodology.' },
     audit: { title: 'Audit Evidence Builder', desc: 'Generate evidence request lists, audit checklists, and finding response templates.' },
     gap: { title: 'Gap Assessment', desc: 'Conduct compliance gap analysis with severity ratings and remediation plans.' },
     sources: { title: 'Source Library', desc: 'Official framework documents and external sources.' },
@@ -109,7 +109,7 @@
       { i: '📤', t: 'Generate a Data Backup and Recovery Procedure' },
     ],
     risk: [
-      { i: '🎯', t: 'Generate a cybersecurity risk register for a Saudi bank with 20 typical risks' },
+      { i: '🎯', t: 'Generate a cybersecurity risk register for a Saudi bank with 15 application development risks using the NCA template structure' },
       { i: '☁️', t: 'Risk register for cloud migration aligned with NCA CCC' },
       { i: '🏭', t: 'OT/ICS risk register for an industrial facility (NCA OTCC)' },
       { i: '🔓', t: 'Third-party risk register with vendor categorization' },
