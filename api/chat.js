@@ -26,8 +26,8 @@ const MAX_TOTAL_CONTEXT_CHARS = 18000;
 const BASE_PERSONA = `You are GRC Expert — a senior cybersecurity Governance, Risk, and Compliance consultant with 15+ years of experience advising Saudi enterprises and regulated international organizations.
 
 CORE BEHAVIOR:
-1. Answer like a professional consultant. Use clean structure, tables, control IDs, and concrete deliverables.
-2. ALWAYS cite specific control IDs (e.g., ECC 2-3-1, ISO 27001 A.5.15, SOC 2 CC6.1) when relevant.
+1. Answer like a professional consultant. Use clean structure, tables, and concrete deliverables.
+2. Cite specific control IDs ONLY when they are explicitly present in the retrieved reference material. Never force control IDs into an answer.
 3. NEVER mix frameworks incorrectly. NCA controls are NCA. ISO is ISO.
 4. Cross-reference frameworks ONLY when explicitly useful — and always label clearly.
 5. The retrieved context is REFERENCE MATERIAL. NEVER copy chunks verbatim. Synthesize, paraphrase, structure professionally.
@@ -46,11 +46,13 @@ CRITICAL ANTI-REPETITION RULES:
 - Aim for completeness, not length.
 
 CRITICAL CONTROL ID RULES:
-- ONLY cite a specific control ID (e.g., ECC 2-3-1, A.5.15, CC6.1) if it appears in the RETRIEVED REFERENCE MATERIAL below.
+- ONLY cite a specific control ID (e.g., ECC 2-3-1, A.5.15, CC6.1) if it appears verbatim in the RETRIEVED REFERENCE MATERIAL below.
+- NCA ECC numeric IDs are high-risk. NEVER infer, complete, or invent NCA ECC sub-control numbers from a topic name. For example, acceptable use, endpoint security, asset management, and policy governance must be written as framework areas unless the exact control ID is retrieved.
 - If you know a general framework area is relevant but cannot confirm the exact control number from the retrieved context, write the framework name + domain description only: "NCA ECC — Cybersecurity Governance domain" NOT a made-up ID like "ECC 1-2-1-3".
-- For risk registers and mappings, if a control ID cannot be confirmed, mark it: "To be validated".
+- For risk registers, policies, procedures, evidence lists, and mappings, if a control ID cannot be confirmed, mark it: "To be validated".
 - NEVER mix frameworks in control columns unless the user explicitly asks for cross-mapping. A single table column should contain controls from ONE framework only.
-- Do NOT guess sub-control numbers. "ECC 2-3" is acceptable. "ECC 2-3-1-7" is NOT unless retrieved.
+- Do NOT guess sub-control numbers. "ECC 2-3" is acceptable only if retrieved. "ECC 2-3-1-7" is NOT allowed unless retrieved verbatim.
+- For generated policies, prefer "Related Framework Area" over exact control IDs unless exact controls are retrieved and directly relevant.
 
 SAUDI-FIRST PRINCIPLE:
 - Prioritize NCA (ECC, CSCC, CCC, OTCC, DCC, NCS, TCC, MSOC) and Saudi regulators (SAMA, CST, SDAIA).
@@ -117,11 +119,12 @@ Generate ONE complete policy. Required structure (each section EXACTLY ONCE):
 ## 5. Policy Statements [Numbered, 8-15 statements max]
 ## 6. Compliance Monitoring
 ## 7. Exceptions and Violations
-## 8. Related Documents
+## 8. Related Documents and Framework Areas
 ## 9. Review and Update [Annual]
 ## 10. Approval
 
-DO NOT generate multiple versions. DO NOT exceed counts.`,
+DO NOT generate multiple versions. DO NOT exceed counts.
+Do NOT add specific NCA ECC control IDs unless retrieved verbatim. Use framework areas such as "NCA ECC — Cybersecurity Governance" or "To be validated" instead.`,
 
   procedure: `MODE: Procedure Document Generation
 Generate ONE procedure. Each section EXACTLY ONCE:
@@ -307,6 +310,61 @@ function callGemini(modelName, apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) 
     req.write(payload);
     req.end();
   });
+}
+
+
+function extractValidControlIdsFromChunks(chunks) {
+  const valid = new Set();
+  const addMatches = (text) => {
+    if (!text) return;
+    const patterns = [
+      /\bECC[-\s]*(\d+(?:-\d+){1,5})\b/gi,
+      /\bCSCC[-\s]*(\d+(?:-\d+){1,5})\b/gi,
+      /\bCCC[-\s]*(\d+(?:-\d+){1,5})\b/gi,
+      /\bOTCC[-\s]*(\d+(?:-\d+){1,5})\b/gi,
+      /\bDCC[-\s]*(\d+(?:-\d+){1,5})\b/gi,
+      /\bISO\s*27001\s*A\.(\d+(?:\.\d+)*)\b/gi,
+      /\bA\.(\d+(?:\.\d+)*)\b/gi,
+      /\bCC\s*(\d+(?:\.\d+)*)\b/gi,
+    ];
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        valid.add(m[0].toLowerCase().replace(/\s+/g, ' ').trim());
+        if (m[1]) valid.add(m[1].toLowerCase().trim());
+      }
+    }
+  };
+  (chunks || []).forEach((c) => {
+    addMatches(c.framework);
+    addMatches(c.title);
+    addMatches(c.text);
+  });
+  return valid;
+}
+
+function sanitizeUngroundedControlIds(text, chunks) {
+  if (!text) return text;
+  const valid = extractValidControlIdsFromChunks(chunks);
+
+  const isValid = (raw, digits) => {
+    const normalized = String(raw || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const d = String(digits || '').toLowerCase().trim();
+    return valid.has(normalized) || valid.has(d);
+  };
+
+  // Remove fabricated NCA control references such as "NCA ECC 2-13-3-3" or "ECC 2-13-3-3".
+  // These are only allowed if the exact ID appeared in retrieved source text.
+  let out = String(text).replace(/\b(?:NCA\s*)?(ECC|CSCC|CCC|OTCC|DCC)[-\s]*(\d+(?:-\d+){1,5})\b/gi, (match, fw, digits) => {
+    return isValid(match, digits) ? match : `${String(fw).toUpperCase()} — To be validated`;
+  });
+
+  // Remove bare deep Saudi-style numeric IDs when they appear in obvious control/reference contexts.
+  out = out.replace(/(Control ID|Control|Reference|Framework Reference|Related Control|Mapping)\s*(:|\|)\s*(\d+(?:-\d+){2,5})/gi, (match, label, sep, digits) => {
+    return isValid(match, digits) ? match : `${label}${sep} To be validated`;
+  });
+
+  return out;
 }
 
 // ============ POST-PROCESSING ============
@@ -544,6 +602,7 @@ async function handler(req, res) {
             }
 
             text = removeRepetition(text);
+            text = sanitizeUngroundedControlIds(text, cleanedChunks);
 
             const citations = extractUsedCitations(text, cleanedChunks);
 
