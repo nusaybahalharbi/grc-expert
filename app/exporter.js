@@ -1,31 +1,90 @@
 /**
- * GRC Expert — Export Module v4.0
+ * GRC Expert — Export Module v5.0
  *
- * VERIFIED library globals:
- *   Word:  window.docx  (unpkg.com/docx@8.5.0/build/index.umd.js)
- *          → exposes: docx.Document, docx.Packer, docx.Paragraph, docx.TextRun, etc.
- *   PDF:   window.jspdf (cdnjs jspdf/2.5.1/jspdf.umd.min.js)
- *          → exposes: jspdf.jsPDF (constructor)
- *   Excel: window.XLSX  (cdnjs xlsx/0.18.5/xlsx.full.min.js)
- *          → exposes: XLSX.utils, XLSX.writeFile
+ * FIX: "Invalid arguments passed to jsPDF.text"
+ *   - Added safeText() wrapper that sanitizes EVERY doc.text() call
+ *   - Added safeSplit() wrapper for splitTextToSize
+ *   - Fixed parser that could produce undefined .text properties
+ *   - All strip() calls produce guaranteed strings
  */
 
 (function (window) {
   'use strict';
 
-  // ============ HELPERS ============
+  // ============ SAFE STRING HELPERS ============
 
+  /** Guarantee a string. Never returns null/undefined/NaN/object. */
+  function str(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'number') return isNaN(v) ? '' : String(v);
+    if (Array.isArray(v)) return v.map(str).join(' ');
+    return String(v);
+  }
+
+  /** Strip markdown inline formatting → plain text string. */
   function strip(text) {
-    if (!text) return '';
-    return String(text)
+    var s = str(text);
+    return s
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
       .replace(/\*\*([^*]+)\*\*/g, '$1')
       .replace(/\*([^*]+)\*/g, '$1')
       .replace(/`([^`]+)`/g, '$1');
   }
 
+  function normalizeMarkdownTables(text) {
+    var lines = str(text).split('\n');
+    var out = [];
+    function isTableLine(line) { return /^\s*\|.*\|\s*$/.test(str(line)); }
+    function isSeparator(line) { return /^\s*\|[\s\-:|]+\|\s*$/.test(str(line)); }
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (isSeparator(line) && out.length > 0 && isTableLine(out[out.length - 1])) {
+        var count = Math.max(out[out.length - 1].split('|').slice(1, -1).length, 1);
+        out.push('|' + Array(count).fill('---').join('|') + '|');
+      } else if (!isTableLine(line) && /^\s*[-_]{20,}\s*$/.test(line)) {
+        out.push('---');
+      } else {
+        out.push(line);
+      }
+    }
+    return out.join('\n');
+  }
+
+  /** Safe wrapper for doc.text — validates all arguments. */
+  function safeText(doc, text, x, y, opts) {
+    var content = str(text);
+    if (!content) return; // skip empty
+    var safeX = (typeof x === 'number' && isFinite(x)) ? x : 40;
+    var safeY = (typeof y === 'number' && isFinite(y)) ? y : 40;
+    try {
+      if (opts) {
+        doc.text(content, safeX, safeY, opts);
+      } else {
+        doc.text(content, safeX, safeY);
+      }
+    } catch (e) {
+      console.warn('[export] safeText caught:', e.message, '| text:', content.substring(0, 50), '| x:', safeX, '| y:', safeY);
+    }
+  }
+
+  /** Safe wrapper for splitTextToSize — always returns string array. */
+  function safeSplit(doc, text, maxWidth) {
+    var content = str(text);
+    if (!content) return [];
+    var w = (typeof maxWidth === 'number' && isFinite(maxWidth) && maxWidth > 0) ? maxWidth : 400;
+    try {
+      var result = doc.splitTextToSize(content, w);
+      if (!Array.isArray(result)) return [content];
+      return result.map(str); // ensure each line is a string
+    } catch (e) {
+      console.warn('[export] safeSplit caught:', e.message);
+      return [content];
+    }
+  }
+
   function safeName(name) {
-    return String(name || 'GRC-Document').replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').substring(0, 80);
+    return str(name || 'GRC-Document').replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').substring(0, 80) || 'GRC-Document';
   }
 
   function download(blob, filename) {
@@ -38,7 +97,7 @@
 
   function hasTable(md) {
     if (!md) return false;
-    var lines = md.split('\n');
+    var lines = normalizeMarkdownTables(md).split('\n');
     for (var i = 0; i < lines.length - 1; i++) {
       if (lines[i].trim().startsWith('|') && /^\s*\|[\s\-|:]+\|\s*$/.test(lines[i + 1])) return true;
     }
@@ -47,36 +106,113 @@
 
   function inferTitle(md) {
     if (!md) return null;
-    var m = md.match(/^#+\s+(.+)$/m);
+    var m = str(md).match(/^#+\s+(.+)$/m);
     return m ? strip(m[1]) : null;
   }
 
-  // ============ BLOCK PARSER ============
+  // ============ BLOCK PARSER (robust) ============
 
   function parse(md) {
-    var lines = md.split('\n'), blocks = [], i = 0;
+    var lines = normalizeMarkdownTables(md).split('\n');
+    var blocks = [];
+    var i = 0;
+
     while (i < lines.length) {
-      var t = lines[i].trim();
+      var raw = lines[i];
+      var t = str(raw).trim();
       if (!t) { i++; continue; }
-      var m;
-      if ((m = t.match(/^(#{1,4})\s+(.+)$/))) { blocks.push({ type: 'h' + m[1].length, text: m[2] }); i++; continue; }
-      if (/^[-*_]{3,}$/.test(t)) { blocks.push({ type: 'hr' }); i++; continue; }
-      if (t.startsWith('|') && i + 1 < lines.length && /^\s*\|[\s\-|:]+\|\s*$/.test(lines[i + 1])) {
-        var hdr = t.split('|').slice(1, -1).map(function (c) { return c.trim(); });
-        i += 2; var rows = [];
-        while (i < lines.length && lines[i].trim().startsWith('|')) {
-          rows.push(lines[i].split('|').slice(1, -1).map(function (c) { return c.trim(); })); i++;
-        }
-        blocks.push({ type: 'table', headers: hdr, rows: rows }); continue;
+
+      // Headings
+      var hMatch = t.match(/^(#{1,4})\s+(.+)$/);
+      if (hMatch) {
+        blocks.push({ type: 'h' + hMatch[1].length, text: str(hMatch[2]) });
+        i++; continue;
       }
-      if (t.startsWith('```')) { i++; var code = []; while (i < lines.length && !lines[i].trim().startsWith('```')) { code.push(lines[i]); i++; } i++; blocks.push({ type: 'code', text: code.join('\n') }); continue; }
-      if (t.startsWith('>')) { var q = []; while (i < lines.length && lines[i].trim().startsWith('>')) { q.push(lines[i].trim().replace(/^>\s?/, '')); i++; } blocks.push({ type: 'quote', text: q.join(' ') }); continue; }
-      if (/^[-*+]\s+/.test(t)) { var ul = []; while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { ul.push(lines[i].replace(/^\s*[-*+]\s+/, '')); i++; } blocks.push({ type: 'ul', items: ul }); continue; }
-      if (/^\d+\.\s+/.test(t)) { var ol = []; while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { ol.push(lines[i].replace(/^\s*\d+\.\s+/, '')); i++; } blocks.push({ type: 'ol', items: ol }); continue; }
-      var p = [t]; i++;
-      while (i < lines.length && lines[i].trim() && !/^[#|>`\-*+\d]/.test(lines[i].trim().charAt(0) === '#' ? '#' : lines[i].trim())) { p.push(lines[i].trim()); i++; }
+
+      // HR
+      if (/^[-*_]{3,}$/.test(t)) {
+        blocks.push({ type: 'hr' });
+        i++; continue;
+      }
+
+      // Table
+      if (t.startsWith('|') && i + 1 < lines.length && /^\s*\|[\s\-|:]+\|\s*$/.test(str(lines[i + 1]))) {
+        var hdr = t.split('|').slice(1, -1).map(function (c) { return str(c).trim(); });
+        i += 2;
+        var rows = [];
+        while (i < lines.length && str(lines[i]).trim().startsWith('|')) {
+          rows.push(str(lines[i]).split('|').slice(1, -1).map(function (c) { return str(c).trim(); }));
+          i++;
+        }
+        blocks.push({ type: 'table', headers: hdr, rows: rows });
+        continue;
+      }
+
+      // Code block
+      if (t.startsWith('```')) {
+        i++;
+        var code = [];
+        while (i < lines.length && !str(lines[i]).trim().startsWith('```')) {
+          code.push(str(lines[i]));
+          i++;
+        }
+        if (i < lines.length) i++; // skip closing ```
+        blocks.push({ type: 'code', text: code.join('\n') });
+        continue;
+      }
+
+      // Blockquote
+      if (t.startsWith('>')) {
+        var q = [];
+        while (i < lines.length && str(lines[i]).trim().startsWith('>')) {
+          q.push(str(lines[i]).trim().replace(/^>\s?/, ''));
+          i++;
+        }
+        blocks.push({ type: 'quote', text: q.join(' ') });
+        continue;
+      }
+
+      // Unordered list
+      if (/^[-*+]\s+/.test(t)) {
+        var ul = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(str(lines[i]))) {
+          ul.push(str(lines[i]).replace(/^\s*[-*+]\s+/, ''));
+          i++;
+        }
+        blocks.push({ type: 'ul', items: ul });
+        continue;
+      }
+
+      // Ordered list
+      if (/^\d+\.\s+/.test(t)) {
+        var ol = [];
+        while (i < lines.length && /^\s*\d+\.\s+/.test(str(lines[i]))) {
+          ol.push(str(lines[i]).replace(/^\s*\d+\.\s+/, ''));
+          i++;
+        }
+        blocks.push({ type: 'ol', items: ol });
+        continue;
+      }
+
+      // Paragraph — collect lines until empty or block start
+      var p = [t];
+      i++;
+      while (i < lines.length) {
+        var nextLine = str(lines[i]).trim();
+        if (!nextLine) break; // empty line ends paragraph
+        if (/^#{1,4}\s/.test(nextLine)) break; // heading
+        if (nextLine.startsWith('|')) break;    // table
+        if (nextLine.startsWith('```')) break;  // code
+        if (nextLine.startsWith('>')) break;    // quote
+        if (/^[-*+]\s+/.test(nextLine)) break;  // ul
+        if (/^\d+\.\s+/.test(nextLine)) break;  // ol
+        if (/^[-*_]{3,}$/.test(nextLine)) break; // hr
+        p.push(nextLine);
+        i++;
+      }
       blocks.push({ type: 'p', text: p.join(' ') });
     }
+
     return blocks;
   }
 
@@ -84,13 +220,18 @@
 
   async function copyText(text) {
     console.log('[export] Copy');
-    try { await navigator.clipboard.writeText(text); return true; }
-    catch (e) {
-      var ta = document.createElement('textarea'); ta.value = text;
+    try {
+      await navigator.clipboard.writeText(normalizeMarkdownTables(text));
+      return true;
+    } catch (e) {
+      var ta = document.createElement('textarea');
+      ta.value = normalizeMarkdownTables(text);
       ta.style.cssText = 'position:fixed;opacity:0;left:-9999px';
       document.body.appendChild(ta); ta.select();
-      var ok = false; try { ok = document.execCommand('copy'); } catch (_) {}
-      document.body.removeChild(ta); return ok;
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+      return ok;
     }
   }
 
@@ -99,21 +240,17 @@
   async function exportWord(markdown, title) {
     console.log('[export] Word start');
 
-    // Validate library
     if (!window.docx) {
-      console.error('[export] window.docx =', typeof window.docx);
-      throw new Error('Word library not loaded. The docx CDN may be blocked. Please refresh and try again.');
+      throw new Error('Word library not loaded. Please refresh the page.');
     }
     var D = window.docx;
     if (!D.Document || !D.Packer || !D.Paragraph || !D.TextRun) {
-      console.error('[export] docx keys:', Object.keys(D).join(', '));
-      throw new Error('Word library loaded but missing required classes (Document/Packer/Paragraph). Version mismatch.');
+      throw new Error('Word library incomplete. Please refresh the page.');
     }
 
     var blocks = parse(markdown);
     var children = [];
 
-    // Title
     if (title) {
       children.push(new D.Paragraph({
         children: [new D.TextRun({ text: strip(title), bold: true, size: 36, color: '0EA5E9' })],
@@ -159,7 +296,6 @@
           var bd = { style: D.BorderStyle.SINGLE, size: 3, color: 'AAAAAA' };
           var borders = { top: bd, bottom: bd, left: bd, right: bd };
           var tRows = [];
-          // Header
           tRows.push(new D.TableRow({
             tableHeader: true,
             children: b.headers.map(function (h) {
@@ -169,47 +305,42 @@
               });
             }),
           }));
-          // Data
           for (var ri = 0; ri < b.rows.length; ri++) {
             var r = b.rows[ri];
             tRows.push(new D.TableRow({
               children: b.headers.map(function (_, ci) {
                 return new D.TableCell({
-                  children: [new D.Paragraph({ children: [new D.TextRun({ text: strip(r[ci] || ''), size: 18 })] })],
+                  children: [new D.Paragraph({ children: [new D.TextRun({ text: strip(r[ci]), size: 18 })] })],
                   borders: borders,
                 });
               }),
             }));
           }
-          children.push(new D.Table({
-            rows: tRows, width: { size: 100, type: D.WidthType.PERCENTAGE },
-          }));
+          children.push(new D.Table({ rows: tRows, width: { size: 100, type: D.WidthType.PERCENTAGE } }));
           children.push(new D.Paragraph({ children: [], spacing: { after: 200 } }));
         } catch (te) {
           console.warn('[export] Word table fallback:', te.message);
-          // Fallback: text
-          children.push(new D.Paragraph({ children: [new D.TextRun({ text: b.headers.join(' | '), bold: true, size: 20 })], spacing: { after: 60 } }));
-          for (var tr = 0; tr < b.rows.length; tr++) {
-            children.push(new D.Paragraph({ children: [new D.TextRun({ text: b.rows[tr].map(strip).join(' | '), size: 18 })], spacing: { after: 40 } }));
+          children.push(new D.Paragraph({ children: [new D.TextRun({ text: b.headers.map(strip).join(' | '), bold: true, size: 20 })], spacing: { after: 60 } }));
+          for (var tr2 = 0; tr2 < b.rows.length; tr2++) {
+            children.push(new D.Paragraph({ children: [new D.TextRun({ text: b.rows[tr2].map(strip).join(' | '), size: 18 })], spacing: { after: 40 } }));
           }
         }
       } else if (b.type === 'code') {
-        children.push(new D.Paragraph({ children: [new D.TextRun({ text: b.text, font: 'Consolas', size: 18 })], spacing: { after: 120 } }));
+        children.push(new D.Paragraph({ children: [new D.TextRun({ text: str(b.text), font: 'Consolas', size: 18 })], spacing: { after: 120 } }));
       } else if (b.type === 'quote') {
         children.push(new D.Paragraph({ children: [new D.TextRun({ text: strip(b.text), italics: true, size: 22 })], indent: { left: 400 }, spacing: { after: 120 } }));
       }
+      // hr and unknown types silently skipped
     }
 
-    // Footer
     children.push(new D.Paragraph({
       children: [new D.TextRun({ text: 'Generated by GRC Expert', size: 16, color: '999999', italics: true })],
       spacing: { before: 400 },
     }));
 
-    console.log('[export] Word: ' + children.length + ' elements, packing...');
-
+    console.log('[export] Word: ' + children.length + ' elements');
     var doc = new D.Document({
-      creator: 'GRC Expert', title: title || 'GRC Document',
+      creator: 'GRC Expert', title: str(title) || 'GRC Document',
       sections: [{ properties: {}, children: children }],
     });
     var blob = await D.Packer.toBlob(doc);
@@ -225,82 +356,171 @@
     console.log('[export] PDF start');
 
     if (!window.jspdf || !window.jspdf.jsPDF) {
-      console.error('[export] window.jspdf =', typeof window.jspdf);
-      if (window.jspdf) console.error('[export] jspdf keys:', Object.keys(window.jspdf).join(', '));
-      throw new Error('PDF library not loaded. The jsPDF CDN may be blocked. Please refresh and try again.');
+      throw new Error('PDF library not loaded. Please refresh the page.');
     }
 
     var JPDF = window.jspdf.jsPDF;
     var doc = new JPDF({ unit: 'pt', format: 'a4' });
-    var pw = doc.internal.pageSize.width, ph = doc.internal.pageSize.height, mg = 40, w = pw - mg * 2, y = mg;
+    var pw = doc.internal.pageSize.width;
+    var ph = doc.internal.pageSize.height;
+    var mg = 40;
+    var w = pw - mg * 2;
+    var y = mg;
 
     function np(n) { if (y + (n || 20) > ph - mg) { doc.addPage(); y = mg; } }
 
+    // Title
     if (title) {
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.setTextColor(14, 165, 233);
-      doc.splitTextToSize(strip(title), w).forEach(function (l) { np(24); doc.text(l, mg, y); y += 24; });
-      y += 10; doc.setTextColor(0);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(20);
+      doc.setTextColor(14, 165, 233);
+      var titleLines = safeSplit(doc, strip(title), w);
+      for (var ti = 0; ti < titleLines.length; ti++) {
+        np(24);
+        safeText(doc, titleLines[ti], mg, y);
+        y += 24;
+      }
+      y += 10;
+      doc.setTextColor(0, 0, 0);
     }
 
     var blocks = parse(markdown);
+
     for (var bi = 0; bi < blocks.length; bi++) {
       var b = blocks[bi];
-      if (b.type.charAt(0) === 'h') {
-        var fs = { h1: 18, h2: 15, h3: 13, h4: 12 }, lh = { h1: 22, h2: 20, h3: 18, h4: 16 };
-        y += 6; np(lh[b.type] + 4);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(fs[b.type]);
+
+      if (b.type === 'h1' || b.type === 'h2' || b.type === 'h3' || b.type === 'h4') {
+        var fSizes = { h1: 18, h2: 15, h3: 13, h4: 12 };
+        var lineH = { h1: 22, h2: 20, h3: 18, h4: 16 };
+        y += 6;
+        np(lineH[b.type] + 4);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(fSizes[b.type]);
         if (b.type === 'h1' || b.type === 'h2') doc.setTextColor(14, 165, 233);
-        doc.splitTextToSize(strip(b.text), w).forEach(function (l) { np(lh[b.type]); doc.text(l, mg, y); y += lh[b.type]; });
-        doc.setTextColor(0); y += 4;
+        var hLines = safeSplit(doc, strip(b.text), w);
+        for (var hi = 0; hi < hLines.length; hi++) {
+          np(lineH[b.type]);
+          safeText(doc, hLines[hi], mg, y);
+          y += lineH[b.type];
+        }
+        doc.setTextColor(0, 0, 0);
+        y += 4;
+
       } else if (b.type === 'p') {
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5);
-        doc.splitTextToSize(strip(b.text), w).forEach(function (l) { np(14); doc.text(l, mg, y); y += 14; });
-        y += 4;
-      } else if (b.type === 'ul' || b.type === 'ol') {
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5);
-        (b.items || []).forEach(function (item, idx) {
-          var pf = b.type === 'ol' ? (idx + 1) + '. ' : '• ';
-          doc.splitTextToSize(pf + strip(item), w - 12).forEach(function (l) { np(13); doc.text(l, mg + 12, y); y += 13; });
-        });
-        y += 4;
-      } else if (b.type === 'table' && typeof doc.autoTable === 'function') {
-        doc.autoTable({
-          head: [b.headers.map(strip)],
-          body: b.rows.map(function (r) { return r.map(strip); }),
-          startY: y, margin: { left: mg, right: mg },
-          styles: { fontSize: 8.5, cellPadding: 4, overflow: 'linebreak' },
-          headStyles: { fillColor: [14, 165, 233], textColor: 255, fontStyle: 'bold' },
-          alternateRowStyles: { fillColor: [245, 250, 255] },
-          theme: 'grid',
-        });
-        y = doc.lastAutoTable.finalY + 10;
-      } else if (b.type === 'table') {
-        // Fallback text table
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); np(14);
-        doc.text(b.headers.map(strip).join(' | '), mg, y); y += 14;
         doc.setFont('helvetica', 'normal');
-        b.rows.forEach(function (r) {
-          doc.splitTextToSize(r.map(strip).join(' | '), w).forEach(function (l) { np(12); doc.text(l, mg, y); y += 12; });
-        }); y += 6;
+        doc.setFontSize(10.5);
+        var pLines = safeSplit(doc, strip(b.text), w);
+        for (var pi = 0; pi < pLines.length; pi++) {
+          np(14);
+          safeText(doc, pLines[pi], mg, y);
+          y += 14;
+        }
+        y += 4;
+
+      } else if (b.type === 'ul' || b.type === 'ol') {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10.5);
+        var items = b.items || [];
+        for (var ii = 0; ii < items.length; ii++) {
+          var prefix = (b.type === 'ol') ? (ii + 1) + '. ' : '• ';
+          var iLines = safeSplit(doc, prefix + strip(items[ii]), w - 12);
+          for (var il = 0; il < iLines.length; il++) {
+            np(13);
+            safeText(doc, iLines[il], mg + 12, y);
+            y += 13;
+          }
+        }
+        y += 4;
+
+      } else if (b.type === 'table') {
+        if (typeof doc.autoTable === 'function') {
+          try {
+            var headData = b.headers.map(strip);
+            var bodyData = b.rows.map(function (r) { return r.map(strip); });
+            doc.autoTable({
+              head: [headData],
+              body: bodyData,
+              startY: y,
+              margin: { left: mg, right: mg },
+              styles: { fontSize: 8.5, cellPadding: 4, overflow: 'linebreak' },
+              headStyles: { fillColor: [14, 165, 233], textColor: 255, fontStyle: 'bold' },
+              alternateRowStyles: { fillColor: [245, 250, 255] },
+              theme: 'grid',
+            });
+            y = doc.lastAutoTable.finalY + 10;
+          } catch (atErr) {
+            console.warn('[export] autoTable error:', atErr.message);
+            // Fallback below
+            _renderTableAsText(doc, b, mg, w);
+          }
+        } else {
+          _renderTableAsText(doc, b, mg, w);
+        }
+
       } else if (b.type === 'code') {
-        doc.setFont('courier', 'normal'); doc.setFontSize(9);
-        b.text.split('\n').forEach(function (cl) {
-          doc.splitTextToSize(cl, w).forEach(function (l) { np(12); doc.text(l, mg, y); y += 12; });
-        }); y += 6;
+        doc.setFont('courier', 'normal');
+        doc.setFontSize(9);
+        var codeStr = str(b.text);
+        var codeLines = codeStr.split('\n');
+        for (var ci = 0; ci < codeLines.length; ci++) {
+          var cl = safeSplit(doc, str(codeLines[ci]), w);
+          for (var cli = 0; cli < cl.length; cli++) {
+            np(12);
+            safeText(doc, cl[cli], mg, y);
+            y += 12;
+          }
+        }
+        y += 6;
+
+      } else if (b.type === 'quote') {
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(10);
+        var qLines = safeSplit(doc, strip(b.text), w - 20);
+        for (var qi = 0; qi < qLines.length; qi++) {
+          np(13);
+          safeText(doc, qLines[qi], mg + 20, y);
+          y += 13;
+        }
+        y += 4;
       }
+      // hr and unknown types silently skipped in PDF
     }
 
-    var tp = doc.internal.getNumberOfPages();
-    for (var p = 1; p <= tp; p++) {
-      doc.setPage(p); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(150);
-      doc.text('GRC Expert · Page ' + p + '/' + tp, pw / 2, ph - 20, { align: 'center' });
-      doc.setTextColor(0);
+    // Footer on each page
+    var totalPages = doc.internal.getNumberOfPages();
+    for (var p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      safeText(doc, 'GRC Expert · Page ' + p + '/' + totalPages, pw / 2, ph - 20, { align: 'center' });
+      doc.setTextColor(0, 0, 0);
     }
 
     var fn = safeName(title) + '.pdf';
     doc.save(fn);
     console.log('[export] PDF done: ' + fn);
     return fn;
+
+    // ---- Internal helper for text-based table fallback ----
+    function _renderTableAsText(d, tbl, margin, width) {
+      d.setFont('helvetica', 'bold');
+      d.setFontSize(9);
+      np(14);
+      safeText(d, tbl.headers.map(strip).join(' | '), margin, y);
+      y += 14;
+      d.setFont('helvetica', 'normal');
+      for (var rr = 0; rr < tbl.rows.length; rr++) {
+        var rowText = tbl.rows[rr].map(strip).join(' | ');
+        var rl = safeSplit(d, rowText, width);
+        for (var rli = 0; rli < rl.length; rli++) {
+          np(12);
+          safeText(d, rl[rli], margin, y);
+          y += 12;
+        }
+      }
+      y += 6;
+    }
   }
 
   // ============ EXCEL (.xlsx) ============
@@ -309,8 +529,7 @@
     console.log('[export] Excel start');
 
     if (!window.XLSX || !window.XLSX.utils || !window.XLSX.writeFile) {
-      console.error('[export] window.XLSX =', typeof window.XLSX);
-      throw new Error('Excel library not loaded. The SheetJS CDN may be blocked. Please refresh and try again.');
+      throw new Error('Excel library not loaded. Please refresh the page.');
     }
 
     var blocks = parse(markdown);
@@ -326,22 +545,24 @@
       var data = [tbl.headers.map(strip)];
       for (var ri = 0; ri < tbl.rows.length; ri++) {
         var row = [];
-        for (var ci = 0; ci < tbl.headers.length; ci++) row.push(strip(tbl.rows[ri][ci] || ''));
+        for (var ci = 0; ci < tbl.headers.length; ci++) {
+          row.push(strip(tbl.rows[ri][ci]));
+        }
         data.push(row);
       }
       var ws = window.XLSX.utils.aoa_to_sheet(data);
-      // Auto column widths
+
       ws['!cols'] = tbl.headers.map(function (h, idx) {
         var mx = strip(h).length;
         for (var r = 0; r < tbl.rows.length; r++) {
-          var v = strip(tbl.rows[r][idx] || '').length;
+          var v = strip(tbl.rows[r][idx]).length;
           if (v > mx) mx = v;
         }
         return { wch: Math.min(Math.max(mx + 2, 10), 50) };
       });
 
-      // Sheet name from nearest heading
-      var sn = 'Table ' + (ti + 1), lastH = null;
+      var sn = 'Table ' + (ti + 1);
+      var lastH = null;
       for (var bj = 0; bj < blocks.length; bj++) {
         if (blocks[bj] === tbl) break;
         if (blocks[bj].type && blocks[bj].type.charAt(0) === 'h') lastH = blocks[bj].text;
