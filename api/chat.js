@@ -35,7 +35,8 @@ CORE BEHAVIOR:
 7. NEVER invent control IDs or fabricate citations. If a specific control ID was NOT in the retrieved reference material, do NOT include it. Instead write: "Relevant framework identified — exact control mapping requires validation against the official document."
 8. Respond in the user's language. Arabic queries → Arabic. English → English.
 9. Use markdown: bold for emphasis, tables for comparisons, headers for structure.
-10. End complex answers with a "Sources" section.
+10. For markdown tables, use compact separator rows only, such as |---|---|. NEVER generate long dashed separator lines like :---------------------------.
+11. End complex answers with a "Sources Used" section when references are actually used.
 
 CRITICAL ANTI-REPETITION RULES:
 - DO NOT repeat the same sentence, paragraph, or table row more than once.
@@ -310,8 +311,42 @@ function callGemini(modelName, apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) 
 
 // ============ POST-PROCESSING ============
 
+
+function normalizeMarkdownTables(text) {
+  if (!text) return text;
+  const lines = String(text).split("\n");
+  const out = [];
+
+  const isTableLine = (line) => /^\s*\|.*\|\s*$/.test(line || "");
+  const isSeparator = (line) => /^\s*\|[\s\-:|]+\|\s*$/.test(line || "");
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Normalize markdown table separator rows. LLMs sometimes generate thousands of dashes
+    // based on column width, which creates ugly "----------------" artifacts in copy/export.
+    if (isSeparator(line) && out.length > 0 && isTableLine(out[out.length - 1])) {
+      const headerCells = out[out.length - 1].split("|").slice(1, -1);
+      const count = Math.max(headerCells.length, 1);
+      out.push("|" + Array(count).fill("---").join("|") + "|");
+      continue;
+    }
+
+    // Safety: collapse accidental non-table dash floods while preserving normal horizontal rules.
+    if (!isTableLine(line) && /^\s*[-_]{20,}\s*$/.test(line)) {
+      out.push("---");
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join("\n");
+}
+
 function removeRepetition(text) {
   if (!text) return text;
+  text = normalizeMarkdownTables(text);
 
   const lines = text.split("\n");
   const result = [];

@@ -32,6 +32,25 @@
       .replace(/`([^`]+)`/g, '$1');
   }
 
+  function normalizeMarkdownTables(text) {
+    var lines = str(text).split('\n');
+    var out = [];
+    function isTableLine(line) { return /^\s*\|.*\|\s*$/.test(str(line)); }
+    function isSeparator(line) { return /^\s*\|[\s\-:|]+\|\s*$/.test(str(line)); }
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (isSeparator(line) && out.length > 0 && isTableLine(out[out.length - 1])) {
+        var count = Math.max(out[out.length - 1].split('|').slice(1, -1).length, 1);
+        out.push('|' + Array(count).fill('---').join('|') + '|');
+      } else if (!isTableLine(line) && /^\s*[-_]{20,}\s*$/.test(line)) {
+        out.push('---');
+      } else {
+        out.push(line);
+      }
+    }
+    return out.join('\n');
+  }
+
   /** Safe wrapper for doc.text — validates all arguments. */
   function safeText(doc, text, x, y, opts) {
     var content = str(text);
@@ -78,7 +97,7 @@
 
   function hasTable(md) {
     if (!md) return false;
-    var lines = str(md).split('\n');
+    var lines = normalizeMarkdownTables(md).split('\n');
     for (var i = 0; i < lines.length - 1; i++) {
       if (lines[i].trim().startsWith('|') && /^\s*\|[\s\-|:]+\|\s*$/.test(lines[i + 1])) return true;
     }
@@ -94,7 +113,7 @@
   // ============ BLOCK PARSER (robust) ============
 
   function parse(md) {
-    var lines = str(md).split('\n');
+    var lines = normalizeMarkdownTables(md).split('\n');
     var blocks = [];
     var i = 0;
 
@@ -202,11 +221,11 @@
   async function copyText(text) {
     console.log('[export] Copy');
     try {
-      await navigator.clipboard.writeText(str(text));
+      await navigator.clipboard.writeText(normalizeMarkdownTables(text));
       return true;
     } catch (e) {
       var ta = document.createElement('textarea');
-      ta.value = str(text);
+      ta.value = normalizeMarkdownTables(text);
       ta.style.cssText = 'position:fixed;opacity:0;left:-9999px';
       document.body.appendChild(ta); ta.select();
       var ok = false;

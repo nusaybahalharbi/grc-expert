@@ -91,13 +91,16 @@
     const lines = html.split('\n');
     const out = [];
     let i = 0;
+    const isTableLine = (line) => /^\s*\|.*\|\s*$/.test(line || '');
+    const isSeparator = (line) => /^\s*\|[\s\-:|]+\|\s*$/.test(line || '');
+
     while (i < lines.length) {
       const line = lines[i];
-      if (line.trim().startsWith('|') && i + 1 < lines.length && /^\s*\|[\s\-|:]+\|\s*$/.test(lines[i + 1])) {
+      if (isTableLine(line) && i + 1 < lines.length && isSeparator(lines[i + 1])) {
         const headers = line.split('|').slice(1, -1).map(c => c.trim());
-        i += 2;
+        i += 2; // skip normalized/long separator row
         const rows = [];
-        while (i < lines.length && lines[i].trim().startsWith('|')) {
+        while (i < lines.length && isTableLine(lines[i]) && !isSeparator(lines[i])) {
           const cells = lines[i].split('|').slice(1, -1).map(c => c.trim());
           rows.push(cells);
           i++;
@@ -114,6 +117,9 @@
         }
         tbl += '</tbody></table></div>';
         out.push(tbl);
+      } else if (isSeparator(line)) {
+        // Drop orphan markdown table separator rows instead of showing ugly dashes.
+        i++;
       } else {
         out.push(line);
         i++;
