@@ -11,6 +11,6 @@
  * in the database (Migration 001). NEVER put the service_role key here.
  */
 window.GRC_CONFIG = {
-  SUPABASE_URL: 'https://YOUR-PROJECT-REF.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR-ANON-PUBLIC-KEY',
+  SUPABASE_URL: 'https://rimyhaexegiagvunqmuh.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJpbXloYWV4ZWdpYWd2dW5xbXVoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNjI1OTAsImV4cCI6MjA5ODgzODU5MH0.Z6MeKJURCeKTVUcDLzJyGDBJAQIKVRkp_viE0wbN6oI',
 };
