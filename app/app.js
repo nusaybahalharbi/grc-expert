@@ -511,7 +511,7 @@
     const safetyTimeout = setTimeout(() => {
       console.warn('[upload] Safety timeout reached, hiding indicator');
       procEl.style.display = 'none';
-    }, 60000);
+    }, 120000);
 
     try {
       console.log('[upload] Parsing file...');
