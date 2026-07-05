@@ -27,12 +27,16 @@
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/5.0.2/jspdf.plugin.autotable.min.js"></script>
 
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script defer src="/app/config.js"></script>
+<script defer src="/app/auth.js"></script>
+<script defer src="/app/dashboard.js"></script>
 <script defer src="/app/sources.js"></script>
 <script defer src="/app/ui.js"></script>
 <script defer src="/app/storage.js"></script>
 <script defer src="/app/retrieval.js"></script>
 <script defer src="/app/parsers.js"></script>
-<script defer src="/app/exporter.js?v=pdf-universal-v12"></script>
+<script defer src="/app/exporter.js"></script>
 <script defer src="/app/app.js"></script>
 <script defer src="/app/init.js"></script>
 </head>
@@ -54,10 +58,13 @@
     <nav class="sb-nav">
       <div class="nav-label">Workspace</div>
       <div id="workspaceNav"></div>
+      <div class="nav-label">GRC Operations</div>
+      <div id="grcNav"></div>
       <div class="nav-label">Generators</div>
       <div id="generatorsNav"></div>
       <div class="nav-label">Library</div>
       <div id="sourcesNav"></div>
+      <div id="adminNavWrap"></div>
       <button class="fw-toggle" id="fwToggle">
         <span>Frameworks</span>
         <svg class="fw-toggle-icon" width="10" height="10" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="3"><polyline points="9 18 15 12 9 6"/></svg>
@@ -76,7 +83,17 @@
           Toggle
         </button>
       </div>
-      <div class="credit">Built by <strong>Nusaybah AlHarbi</strong><br><span class="footer-disclaimer">GRC Expert can make mistakes.</span></div>
+      <div id="userChip" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 2px">
+        <div style="min-width:0">
+          <div id="userChipName" style="font-size:12px;font-weight:600;color:var(--text-bright);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+          <div id="userChipRole" style="font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+        </div>
+        <button id="logoutBtn" class="theme-toggle" title="Sign out" style="flex-shrink:0">
+          <svg width="11" height="11" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Logout
+        </button>
+      </div>
+      <div class="credit">Built by <strong>Nusaybah AlHarbi</strong><br>Powered by AI</div>
     </div>
   </aside>
   <main class="main">
@@ -118,7 +135,7 @@
       </div>
       <div class="input-meta">
         <div class="input-meta-left"><span>Press Enter to send · Shift+Enter for new line</span></div>
-        <div class="input-disclaimer">GRC Expert can make mistakes. Verify important compliance and security decisions.</div>
+        <div>GRC Expert</div>
       </div>
     </div>
   </main>

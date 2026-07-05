@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRC Expert — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/app/config.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Inter',sans-serif;background:#060912;color:#E2E8F0;
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background-image:radial-gradient(circle at 15% 20%,rgba(56,189,248,.07) 0%,transparent 40%),
+                   radial-gradient(circle at 85% 80%,rgba(16,185,129,.05) 0%,transparent 40%);
+  padding:20px;
+}
+.card{
+  width:100%;max-width:420px;background:#0B111E;
+  border:1px solid rgba(99,179,237,.12);border-radius:16px;
+  padding:36px 32px;box-shadow:0 20px 60px rgba(0,0,0,.5);
+}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;justify-content:center}
+.brand-logo{
+  width:44px;height:44px;border-radius:11px;
+  background:linear-gradient(135deg,#0EA5E9,#10B981);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:14px;color:#fff;font-family:'JetBrains Mono',monospace;
+  box-shadow:0 4px 16px rgba(14,165,233,.3);
+}
+.brand-name{font-weight:700;font-size:18px;color:#F8FAFC}
+.brand-tag{font-size:10px;color:#38BDF8;font-family:'JetBrains Mono',monospace;letter-spacing:1.5px;font-weight:600}
+h1{font-size:19px;font-weight:700;color:#F8FAFC;margin-bottom:4px;text-align:center}
+.sub{font-size:13px;color:#64748B;text-align:center;margin-bottom:24px}
+label{display:block;font-size:12px;font-weight:600;color:#94A3B8;margin:14px 0 6px}
+input{
+  width:100%;padding:11px 14px;border-radius:9px;
+  background:#0F1729;border:1px solid rgba(99,179,237,.15);
+  color:#E2E8F0;font-size:14px;font-family:inherit;outline:none;transition:border-color .15s;
+}
+input:focus{border-color:#38BDF8;box-shadow:0 0 0 3px rgba(56,189,248,.08)}
+.btn{
+  width:100%;padding:12px;border-radius:9px;border:none;cursor:pointer;
+  background:linear-gradient(135deg,#0EA5E9,#0284C7);color:#fff;
+  font-size:14px;font-weight:600;font-family:inherit;margin-top:20px;
+  box-shadow:0 4px 14px rgba(14,165,233,.3);transition:transform .15s;
+}
+.btn:hover{transform:translateY(-1px)}
+.btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.link{color:#38BDF8;font-size:12.5px;cursor:pointer;text-decoration:none;background:none;border:none;font-family:inherit}
+.link:hover{text-decoration:underline}
+.row{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+.foot{text-align:center;margin-top:20px;font-size:12.5px;color:#64748B}
+.msg{
+  margin-top:16px;padding:10px 14px;border-radius:8px;font-size:12.5px;display:none;
+}
+.msg.error{display:block;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#FCA5A5}
+.msg.success{display:block;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:#6EE7B7}
+.hidden{display:none}
+.check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;color:#94A3B8}
+.check input{width:auto}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="brand-logo">GRC</div>
+    <div>
+      <div class="brand-name">GRC Expert</div>
+      <div class="brand-tag">ENTERPRISE PLATFORM</div>
+    </div>
+  </div>
+
+  <!-- LOGIN -->
+  <div id="view-login">
+    <h1>Sign in</h1>
+    <p class="sub">Access your organization's GRC workspace</p>
+    <label>Email</label>
+    <input type="email" id="li-email" placeholder="you@company.com" autocomplete="email">
+    <label>Password</label>
+    <input type="password" id="li-pass" placeholder="••••••••" autocomplete="current-password">
+    <div class="row">
+      <label class="check" style="margin:0"><input type="checkbox" id="li-remember" checked> Remember me</label>
+      <button class="link" onclick="show('forgot')">Forgot password?</button>
+    </div>
+    <button class="btn" id="li-btn" onclick="doLogin()">Sign In</button>
+    <div class="foot">No account? <button class="link" onclick="show('signup')">Register your organization</button></div>
+  </div>
+
+  <!-- SIGNUP -->
+  <div id="view-signup" class="hidden">
+    <h1>Register organization</h1>
+    <p class="sub">Create your company workspace — you become the Administrator</p>
+    <label>Organization name</label>
+    <input type="text" id="su-org" placeholder="Acme Financial Co.">
+    <label>Your full name</label>
+    <input type="text" id="su-name" placeholder="Nusaybah AlHarbi">
+    <label>Work email</label>
+    <input type="email" id="su-email" placeholder="you@company.com" autocomplete="email">
+    <label>Password (min 8 characters)</label>
+    <input type="password" id="su-pass" placeholder="••••••••" autocomplete="new-password">
+    <button class="btn" id="su-btn" onclick="doSignup()">Create Organization</button>
+    <div class="foot">Already registered? <button class="link" onclick="show('login')">Sign in</button></div>
+  </div>
+
+  <!-- FORGOT -->
+  <div id="view-forgot" class="hidden">
+    <h1>Reset password</h1>
+    <p class="sub">We'll email you a secure reset link</p>
+    <label>Email</label>
+    <input type="email" id="fp-email" placeholder="you@company.com">
+    <button class="btn" id="fp-btn" onclick="doForgot()">Send Reset Link</button>
+    <div class="foot"><button class="link" onclick="show('login')">Back to sign in</button></div>
+  </div>
+
+  <!-- RESET (arrives via email link) -->
+  <div id="view-reset" class="hidden">
+    <h1>Choose a new password</h1>
+    <p class="sub">Enter your new password below</p>
+    <label>New password</label>
+    <input type="password" id="rp-pass" placeholder="••••••••" autocomplete="new-password">
+    <label>Confirm new password</label>
+    <input type="password" id="rp-pass2" placeholder="••••••••">
+    <button class="btn" id="rp-btn" onclick="doReset()">Update Password</button>
+  </div>
+
+  <div class="msg" id="msg"></div>
+</div>
+
+<script>
+var client = supabase.createClient(window.GRC_CONFIG.SUPABASE_URL, window.GRC_CONFIG.SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true }
+});
+
+function show(view) {
+  ['login','signup','forgot','reset'].forEach(function(v){
+    document.getElementById('view-'+v).classList.toggle('hidden', v !== view);
+  });
+  setMsg('');
+}
+function setMsg(text, type) {
+  var m = document.getElementById('msg');
+  m.textContent = text || '';
+  m.className = 'msg' + (text ? ' ' + (type||'error') : '');
+}
+function busy(id, on, label) {
+  var b = document.getElementById(id);
+  b.disabled = on;
+  b.innerHTML = on ? '<span class="spin"></span>' + label : b.dataset.label || label;
+  if (!b.dataset.label) b.dataset.label = label;
+}
+
+// If already signed in → go to app. If arriving from recovery email → show reset view.
+(async function init(){
+  if (window.location.hash.includes('type=recovery')) { show('reset'); return; }
+  var s = await client.auth.getSession();
+  if (s.data.session) window.location.replace('/');
+})();
+client.auth.onAuthStateChange(function(event){
+  if (event === 'PASSWORD_RECOVERY') show('reset');
+});
+
+async function doLogin() {
+  var email = document.getElementById('li-email').value.trim();
+  var pass = document.getElementById('li-pass').value;
+  if (!email || !pass) return setMsg('Enter your email and password.');
+  busy('li-btn', true, 'Signing in...');
+  var res = await client.auth.signInWithPassword({ email: email, password: pass });
+  busy('li-btn', false, 'Sign In');
+  if (res.error) return setMsg(res.error.message);
+  try { await client.rpc('touch_last_login'); } catch(e){}
+  window.location.replace('/');
+}
+
+async function doSignup() {
+  var org = document.getElementById('su-org').value.trim();
+  var name = document.getElementById('su-name').value.trim();
+  var email = document.getElementById('su-email').value.trim();
+  var pass = document.getElementById('su-pass').value;
+  if (!org || !name || !email) return setMsg('All fields are required.');
+  if (pass.length < 8) return setMsg('Password must be at least 8 characters.');
+
+  busy('su-btn', true, 'Creating...');
+  var res = await client.auth.signUp({ email: email, password: pass, options: { data: { full_name: name } } });
+  if (res.error) { busy('su-btn', false, 'Create Organization'); return setMsg(res.error.message); }
+
+  // If email confirmation is ON in Supabase, there's no session yet
+  if (!res.data.session) {
+    busy('su-btn', false, 'Create Organization');
+    // Stash pending registration to complete after email verification + first login
+    localStorage.setItem('grc_pending_org', JSON.stringify({ org: org, name: name }));
+    return setMsg('Check your email to verify your account, then sign in — your organization will be created automatically.', 'success');
+  }
+
+  // Session exists (confirmation disabled) → register org now
+  var reg = await client.rpc('register_organization', { org_name: org, user_full_name: name });
+  busy('su-btn', false, 'Create Organization');
+  if (reg.error) return setMsg('Account created but organization setup failed: ' + reg.error.message);
+  window.location.replace('/');
+}
+
+async function doForgot() {
+  var email = document.getElementById('fp-email').value.trim();
+  if (!email) return setMsg('Enter your email.');
+  busy('fp-btn', true, 'Sending...');
+  var res = await client.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/login.html' });
+  busy('fp-btn', false, 'Send Reset Link');
+  if (res.error) return setMsg(res.error.message);
+  setMsg('Reset link sent — check your inbox.', 'success');
+}
+
+async function doReset() {
+  var p1 = document.getElementById('rp-pass').value;
+  var p2 = document.getElementById('rp-pass2').value;
+  if (p1.length < 8) return setMsg('Password must be at least 8 characters.');
+  if (p1 !== p2) return setMsg('Passwords do not match.');
+  busy('rp-btn', true, 'Updating...');
+  var res = await client.auth.updateUser({ password: p1 });
+  busy('rp-btn', false, 'Update Password');
+  if (res.error) return setMsg(res.error.message);
+  setMsg('Password updated. Redirecting...', 'success');
+  setTimeout(function(){ window.location.replace('/'); }, 1200);
+}
+
+// Enter key submits the visible form
+document.addEventListener('keydown', function(e){
+  if (e.key !== 'Enter') return;
+  if (!document.getElementById('view-login').classList.contains('hidden')) doLogin();
+  else if (!document.getElementById('view-signup').classList.contains('hidden')) doSignup();
+  else if (!document.getElementById('view-forgot').classList.contains('hidden')) doForgot();
+  else if (!document.getElementById('view-reset').classList.contains('hidden')) doReset();
+});
+</script>
+</body>
+</html>
