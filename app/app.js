@@ -273,7 +273,7 @@
       mapping: { title: 'Framework Mapping', sub: 'Compare and cross-reference controls between frameworks. Get accurate mappings between NCA, ISO, NIST, and more.' },
       policy: { title: 'Policy Generator', sub: 'Generate complete, professional policies aligned with NCA Toolkit, ISO 27001, and other frameworks. Customize for your organization.' },
       procedure: { title: 'Procedure Generator', sub: 'Generate executable procedures with roles, steps, inputs, outputs, and evidence requirements.' },
-      risk: { title: 'Risk Register Generator', sub: 'Generate risk registers following the NCA cybersecurity risk register template structure with full treatment plans.' },
+      risk: { title: 'Risk Register Generator', sub: 'Generate risk registers following ISO 31000 and NCA Risk Management methodology with full risk treatment plans.' },
       audit: { title: 'Audit Evidence Builder', sub: 'Generate evidence request lists, audit interview questions, and finding response templates.' },
       gap: { title: 'Gap Assessment', sub: 'Conduct compliance gap analysis with severity ratings, remediation plans, and roadmaps.' },
     };
@@ -689,31 +689,9 @@
       content: m.content,
     }));
 
-    // Set up abort controller with extended timeout for Gemini 2.5 Flash long generations
-    const CLIENT_TIMEOUT_MS = 150000;
+    // Set up abort controller with 60s timeout (gives Gemini time to respond)
     const abortController = new AbortController();
-    const fetchTimeout = setTimeout(() => abortController.abort(), CLIENT_TIMEOUT_MS);
-
-    const progressSteps = [
-      'analyzing your query...',
-      'retrieving relevant controls...',
-      'building the response...',
-      'still working on a longer answer...',
-      'finalizing the output...'
-    ];
-    let progressIndex = 0;
-    const progressTimer = setInterval(() => {
-      progressIndex = Math.min(progressIndex + 1, progressSteps.length - 1);
-      const label = document.querySelector('#typing .msg-model');
-      if (label) label.textContent = progressSteps[progressIndex];
-    }, 15000);
-
-    const cleanupLoading = () => {
-      clearTimeout(fetchTimeout);
-      clearInterval(progressTimer);
-      document.getElementById('typing')?.remove();
-      State.busy = false;
-    };
+    const fetchTimeout = setTimeout(() => abortController.abort(), 120000);
 
     console.log('[chat] Sending request to /api/chat...');
 
@@ -736,13 +714,13 @@
         fwFocus: State.currentFw === 'all' ? 'all' : window.sources.getFramework(State.currentFw)?.kbName,
       }),
     })
-      .then(async r => {
-        const data = await r.json().catch(() => ({ error: { message: 'Invalid response from server' } }));
-        if (!r.ok && !data.error) data.error = { message: `Server returned HTTP ${r.status}` };
-        return data;
+      .then(r => {
+        clearTimeout(fetchTimeout);
+        return r.json();
       })
       .then(data => {
-        cleanupLoading();
+        document.getElementById('typing')?.remove();
+        State.busy = false;
 
         if (data.error) {
           console.error('[chat] API error:', data.error);
@@ -761,7 +739,11 @@
 
         console.log(`[chat] Response: ${txt.length} chars from ${data.modelUsed}`);
 
-        const citations = Array.isArray(data.citations) ? data.citations : [];
+        const citations = retrievedChunks.length > 0 ? retrievedChunks.map(c => ({
+          framework: c.framework,
+          title: c.title,
+          category: c.category,
+        })) : [];
 
         State.messages.push({
           role: 'assistant',
@@ -774,10 +756,12 @@
         scrollToBottom();
       })
       .catch(err => {
-        cleanupLoading();
+        clearTimeout(fetchTimeout);
+        document.getElementById('typing')?.remove();
+        State.busy = false;
         console.error('[chat] Fetch error:', err);
         if (err.name === 'AbortError') {
-          showError('Request timed out after 150 seconds. The AI may be generating a long response or Gemini may be overloaded — please try again with a shorter request or split it into sections.');
+          showError('Request timed out after 2 minutes. The AI may be overloaded — please try again.');
         } else {
           showError('Request failed: ' + (err.message || err));
         }
@@ -807,7 +791,7 @@
       const unique = [];
       const seen = new Set();
       for (const c of citations) {
-        const key = `${c.ref || ""}|${c.framework}|${c.title}`;
+        const key = `${c.framework}|${c.title}`;
         if (!seen.has(key)) {
           seen.add(key);
           unique.push(c);
@@ -815,11 +799,11 @@
       }
       citationsHtml = `
         <div class="citations">
-          <div class="citations-label">Sources Used</div>
+          <div class="citations-label">Sources Referenced</div>
           ${unique.slice(0, 8).map(c => `
             <span class="citation-chip" title="${window.ui.escapeHtml(c.category)}">
               <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              ${window.ui.escapeHtml(c.ref ? c.ref + " · " : "")}${window.ui.escapeHtml(c.framework)} · ${window.ui.escapeHtml(c.title.substring(0, 40))}${c.title.length > 40 ? '…' : ''}
+              ${window.ui.escapeHtml(c.framework)} · ${window.ui.escapeHtml(c.title.substring(0, 40))}${c.title.length > 40 ? '…' : ''}
             </span>
           `).join('')}
         </div>
