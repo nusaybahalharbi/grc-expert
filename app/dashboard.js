@@ -17,8 +17,18 @@
 
   async function render(container) {
     container.innerHTML = '<div class="kb-page"><div class="empty">Loading dashboard…</div></div>';
-    await window.Auth.ready;
+    try {
+      await window.Auth.ready;
+    } catch (authErr) {
+      console.error('[dashboard] Auth context failed:', authErr);
+      container.innerHTML = '<div class="kb-page"><div class="err-bar">Signed in, but the dashboard context could not load. Please refresh once. If it continues, check get_my_context() in Supabase. Details: ' + esc(authErr.message) + '</div></div>';
+      return;
+    }
     var A = window.Auth;
+    if (!A || !A.user || !A.organization) {
+      container.innerHTML = '<div class="kb-page"><div class="err-bar">Signed in, but your organization profile is missing. Please contact the workspace administrator.</div></div>';
+      return;
+    }
     var c = A.client;
     var orgId = A.organization.id;
 

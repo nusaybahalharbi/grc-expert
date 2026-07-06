@@ -95,14 +95,15 @@
       } catch (e) { console.error('[auth] Pending registration error:', e); }
     }
 
-    // 3. Load full context in one RPC
+    // 3. Load full context in one RPC. Do not automatically sign out if this fails;
+    // keep the session and surface the error so the user is not kicked out during
+    // temporary RPC/RLS/network failures.
     var ctx = await client.rpc('get_my_context');
     if (ctx.error || !ctx.data || !ctx.data.user) {
-      console.error('[auth] Context load failed:', ctx.error);
-      // Authenticated but no profile and no pending org → cannot proceed
-      await client.auth.signOut();
-      window.location.replace('/login.html');
-      return new Promise(function () { });
+      var msg = ctx.error ? ctx.error.message : 'No user context returned from get_my_context.';
+      console.error('[auth] Context load failed:', ctx.error || msg);
+      Auth.loadError = msg;
+      throw new Error('Context load failed: ' + msg);
     }
 
     Auth.user = ctx.data.user;
