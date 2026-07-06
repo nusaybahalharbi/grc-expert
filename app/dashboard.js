@@ -129,9 +129,15 @@
 
       container.innerHTML =
         '<div class="kb-page">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">' +
         '<div><div style="font-size:18px;font-weight:700;color:var(--text-bright)">' + esc(A.organization.name) + '</div>' +
-        '<div style="font-size:12px;color:var(--text-muted)">Welcome back, ' + esc(A.user.full_name) + ' · ' + esc(A.roles.join(', ')) + '</div></div>' +
+        '<div style="font-size:12px;color:var(--text-muted)">Welcome back, ' + esc(A.user.full_name) + ' · ' + esc(A.user.email) + '</div>' +
+        '<div style="font-size:11px;color:var(--primary);font-weight:600;margin-top:2px">' + esc(A.roles.join(', ') || 'No role assigned') + '</div></div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="btn-primary" data-goto="chat" style="width:auto;padding:9px 16px">Open AI Assistant</button>' +
+        '<button class="btn-primary" data-goto="policy" style="width:auto;padding:9px 16px;background:transparent">Policy Generator</button>' +
+        '<button class="btn-primary" data-goto="risk" style="width:auto;padding:9px 16px;background:transparent">Risk Register</button>' +
+        '</div>' +
         '</div>' +
         '<div class="kb-stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' + statsHtml + '</div>' +
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:20px">' +
@@ -145,6 +151,16 @@
         '<div class="kb-section"><h3>My Tasks</h3>' + tasks + '</div>' +
         '<div class="kb-section"><h3>Upcoming Policy Reviews</h3>' + reviews + '</div>' +
         '</div></div>';
+
+      // Quick-nav buttons: delegate to the sidebar nav items so app.js
+      // routing (mode, generator, placeholder, RBAC) stays the single source of truth
+      container.querySelectorAll('[data-goto]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var target = document.querySelector('.nav-item[data-page="' + btn.dataset.goto + '"]');
+          if (target) target.click();
+          else if (window.ui) window.ui.toast('You do not have access to this module', 'error');
+        });
+      });
 
     } catch (err) {
       console.error('[dashboard]', err);

@@ -10,7 +10,7 @@
 
   // ============ APP STATE ============
   const State = {
-    currentPage: 'chat',
+    currentPage: 'dashboard',
     currentFw: 'all',
     currentMode: 'chat',       // chat | saudi | nca | sama | cst | pdpl | international | mapping
     currentGenerator: null,    // null | policy | procedure | risk_register | etc
@@ -41,6 +41,20 @@
     renderSidebar();
     renderPage();
     setupEventListeners();
+
+    // Enterprise auth context: populate user chip, wire logout, apply RBAC to sidebar
+    if (window.Auth) {
+      window.Auth.ready.then(() => {
+        const A = window.Auth;
+        const nameEl = document.getElementById('userChipName');
+        const roleEl = document.getElementById('userChipRole');
+        if (nameEl) nameEl.textContent = A.user.full_name;
+        if (roleEl) roleEl.textContent = A.roles.join(', ') + ' · ' + A.organization.name;
+        // NOTE: logout is wired in auth.js via event delegation — do not add a second handler here
+        renderSidebar(); // re-render with permissions applied
+        if (State.currentPage === 'dashboard') renderPage(); // refresh dashboard with context
+      }).catch(e => console.error('[app] Auth context failed:', e));
+    }
 
     // Load knowledge base
     setKbStatus('loading', 'Loading KB...');
@@ -81,19 +95,60 @@
   // ============ SIDEBAR ============
   function renderSidebar() {
     // Render workspace nav
-    const workspace = document.getElementById('workspaceNav');
-    const workspaceItems = [
-      { id: 'chat', name: 'AI Assistant', icon: 'msg' },
-      { id: 'upload', name: 'File Upload', icon: 'upload' },
-      { id: 'knowledge', name: 'Knowledge Base', icon: 'book' },
-      { id: 'mapping', name: 'Framework Mapping', icon: 'link' },
-    ];
-    workspace.innerHTML = workspaceItems.map(item =>
+    // RBAC helper: null perm = always visible; otherwise requires permission
+    const can = (perm) => !perm || !window.Auth || !window.Auth.permissions || window.Auth.permissions.size === 0 || window.Auth.can(perm);
+    const navBtn = (item) =>
       `<button class="nav-item ${State.currentPage === item.id ? 'active' : ''}" data-page="${item.id}">
         ${getIcon(item.icon)}
         ${item.name}
-      </button>`
-    ).join('');
+      </button>`;
+
+    const workspace = document.getElementById('workspaceNav');
+    const workspaceItems = [
+      { id: 'dashboard', name: 'Dashboard', icon: 'library', perm: 'dashboard.view' },
+      { id: 'chat', name: 'AI Assistant', icon: 'msg', perm: 'ai.use' },
+      { id: 'upload', name: 'File Upload', icon: 'upload', perm: 'ai.use' },
+      { id: 'knowledge', name: 'Knowledge Base', icon: 'book' },
+      { id: 'mapping', name: 'Framework Mapping', icon: 'link', perm: 'ai.use' },
+    ];
+    workspace.innerHTML = workspaceItems.filter(i => can(i.perm)).map(navBtn).join('');
+
+    // GRC Operations nav (enterprise modules — placeholders until later steps)
+    const grcNav = document.getElementById('grcNav');
+    if (grcNav) {
+      const grcItems = [
+        { id: 'pg_frameworks', name: 'Frameworks', icon: 'library' },
+        { id: 'pg_controls', name: 'Controls', icon: 'check' },
+        { id: 'pg_policies', name: 'Policies', icon: 'doc', perm: 'policy.view' },
+        { id: 'pg_procedures', name: 'Procedures', icon: 'list', perm: 'policy.view' },
+        { id: 'pg_risks', name: 'Risk Register', icon: 'alert', perm: 'risk.view' },
+        { id: 'pg_gaps', name: 'Gap Assessments', icon: 'gap', perm: 'gap.run' },
+        { id: 'pg_evidence', name: 'Evidence Requests', icon: 'check', perm: 'evidence.request' },
+        { id: 'pg_evidence_review', name: 'Evidence Review', icon: 'check', perm: 'evidence.approve' },
+        { id: 'pg_tasks', name: 'Tasks', icon: 'list' },
+        { id: 'pg_reports', name: 'Reports', icon: 'doc', perm: 'export.documents' },
+      ];
+      grcNav.innerHTML = grcItems.filter(i => can(i.perm)).map(navBtn).join('');
+    }
+
+    // Administration nav
+    const adminWrap = document.getElementById('adminNavWrap');
+    if (adminWrap) {
+      const adminItems = [
+        { id: 'pg_users', name: 'Users', icon: 'msg', perm: 'users.manage' },
+        { id: 'pg_roles', name: 'Roles', icon: 'check', perm: 'users.manage' },
+        { id: 'pg_departments', name: 'Departments', icon: 'library', perm: 'users.manage' },
+        { id: 'pg_notifications', name: 'Notifications', icon: 'alert' },
+        { id: 'pg_audit', name: 'Audit Logs', icon: 'book', perm: 'audit.view' },
+        { id: 'pg_settings', name: 'Settings', icon: 'gap', perm: 'settings.manage' },
+        { id: 'pg_billing', name: 'Billing', icon: 'doc', perm: 'settings.manage' },
+        { id: 'pg_help', name: 'Help', icon: 'msg' },
+      ];
+      const visible = adminItems.filter(i => can(i.perm));
+      adminWrap.innerHTML = visible.length
+        ? `<div class="nav-label">Administration</div>` + visible.map(navBtn).join('')
+        : '';
+    }
 
     // Render generators
     const gen = document.getElementById('generatorsNav');
@@ -187,6 +242,7 @@
       audit: { mode: 'chat', generator: 'audit_evidence' },
       gap: { mode: 'chat', generator: 'gap' },
       sources: { mode: 'chat', generator: null },
+      dashboard: { mode: 'chat', generator: null },
     };
     const cfg = pageConfig[page] || { mode: 'chat', generator: null };
     State.currentMode = cfg.mode;
@@ -223,6 +279,13 @@
       audit: 'Audit Evidence Builder',
       gap: 'Gap Assessment',
       sources: 'Source Library',
+      dashboard: 'Dashboard',
+      pg_frameworks: 'Frameworks', pg_controls: 'Controls', pg_policies: 'Policies',
+      pg_procedures: 'Procedures', pg_risks: 'Risk Register', pg_gaps: 'Gap Assessments',
+      pg_evidence: 'Evidence Requests', pg_evidence_review: 'Evidence Review',
+      pg_tasks: 'Tasks', pg_reports: 'Reports', pg_users: 'Users', pg_roles: 'Roles',
+      pg_departments: 'Departments', pg_notifications: 'Notifications',
+      pg_audit: 'Audit Logs', pg_settings: 'Settings', pg_billing: 'Billing', pg_help: 'Help',
     };
     document.getElementById('topTitle').textContent = titles[State.currentPage] || 'GRC Expert';
     const fw = window.sources.FRAMEWORKS.find(f => f.id === State.currentFw);
@@ -235,7 +298,14 @@
     const area = document.getElementById('chatArea');
     const inputBar = document.getElementById('inputBar');
 
-    if (State.currentPage === 'knowledge') {
+    if (State.currentPage === 'dashboard') {
+      inputBar.style.display = 'none';
+      if (window.Dashboard) window.Dashboard.render(area);
+      else area.innerHTML = '<div class="kb-page"><div class="empty">Dashboard module not loaded.</div></div>';
+    } else if (State.currentPage.startsWith('pg_')) {
+      inputBar.style.display = 'none';
+      renderPlaceholderPage(area);
+    } else if (State.currentPage === 'knowledge') {
       renderKnowledgePage(area);
       inputBar.style.display = 'none';
     } else if (State.currentPage === 'sources') {
@@ -251,6 +321,77 @@
       inputBar.style.display = '';
       updatePlaceholder();
     }
+  }
+
+  function renderPlaceholderPage(area) {
+    if (State.currentPage === 'pg_settings') { renderSettingsPage(area); return; }
+    const name = document.getElementById('topTitle').textContent;
+    area.innerHTML = `
+      <div class="kb-page">
+        <div class="welcome" style="min-height:auto;padding:40px 0">
+          <div class="welcome-icon">🛠</div>
+          <h2>${window.ui.escapeHtml(name)}</h2>
+          <p class="welcome-sub">This enterprise module is part of the platform roadmap and will be activated in an upcoming build step. The database tables and permissions behind it are already live.</p>
+        </div>
+      </div>`;
+  }
+
+  async function renderSettingsPage(area) {
+    await window.Auth.ready;
+    const A = window.Auth;
+    const esc = window.ui.escapeHtml;
+    area.innerHTML = `
+      <div class="kb-page">
+        <div class="kb-section"><h3>Organization Profile</h3>
+          <div class="kb-stat" style="max-width:520px">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Organization name</label>
+            <input id="setOrgName" value="${esc(A.organization.name)}" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin:12px 0 4px">Sector</label>
+            <input id="setOrgSector" value="${esc(A.organization.sector || '')}" placeholder="banking, telecom, government..." style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
+            <button class="btn-primary" id="saveOrgBtn" style="margin-top:14px;max-width:200px">Save Organization</button>
+          </div>
+        </div>
+        <div class="kb-section"><h3>My Profile</h3>
+          <div class="kb-stat" style="max-width:520px">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Full name</label>
+            <input id="setUserName" value="${esc(A.user.full_name)}" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin:12px 0 4px">Job title</label>
+            <input id="setUserTitle" value="${esc(A.user.job_title || '')}" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
+            <button class="btn-primary" id="saveUserBtn" style="margin-top:14px;max-width:200px">Save Profile</button>
+          </div>
+        </div>
+        <div class="kb-section"><h3>Change Password</h3>
+          <div class="kb-stat" style="max-width:520px">
+            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">New password (min 8 characters)</label>
+            <input id="setNewPass" type="password" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
+            <button class="btn-primary" id="savePassBtn" style="margin-top:14px;max-width:200px">Update Password</button>
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById('saveOrgBtn').addEventListener('click', async () => {
+      const r = await A.client.from('organizations').update({
+        name: document.getElementById('setOrgName').value.trim(),
+        sector: document.getElementById('setOrgSector').value.trim() || null,
+      }).eq('id', A.organization.id);
+      if (r.error) window.ui.toast('Failed: ' + r.error.message, 'error');
+      else { A.organization.name = document.getElementById('setOrgName').value.trim(); window.ui.toast('Organization saved', 'success'); }
+    });
+    document.getElementById('saveUserBtn').addEventListener('click', async () => {
+      const r = await A.client.from('users').update({
+        full_name: document.getElementById('setUserName').value.trim(),
+        job_title: document.getElementById('setUserTitle').value.trim() || null,
+      }).eq('id', A.user.id);
+      if (r.error) window.ui.toast('Failed: ' + r.error.message, 'error');
+      else { A.user.full_name = document.getElementById('setUserName').value.trim(); window.ui.toast('Profile saved', 'success'); }
+    });
+    document.getElementById('savePassBtn').addEventListener('click', async () => {
+      const p = document.getElementById('setNewPass').value;
+      if (p.length < 8) return window.ui.toast('Minimum 8 characters', 'error');
+      const r = await A.client.auth.updateUser({ password: p });
+      if (r.error) window.ui.toast('Failed: ' + r.error.message, 'error');
+      else { document.getElementById('setNewPass').value = ''; window.ui.toast('Password updated', 'success'); }
+    });
   }
 
   function renderChatPage(area) {
@@ -511,7 +652,7 @@
     const safetyTimeout = setTimeout(() => {
       console.warn('[upload] Safety timeout reached, hiding indicator');
       procEl.style.display = 'none';
-    }, 120000);
+    }, 60000);
 
     try {
       console.log('[upload] Parsing file...');

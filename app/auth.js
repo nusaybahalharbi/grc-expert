@@ -34,17 +34,44 @@
     permissions: new Set(),
     can: function (code) { return Auth.permissions.has(code); },
     logout: async function () {
+      console.log('[auth] Logout clicked');
+      // 1. Best-effort activity log (max 1s, never blocks logout)
       try {
-        await client.from('activity_logs').insert({
-          organization_id: Auth.organization ? Auth.organization.id : null,
-          user_id: Auth.user ? Auth.user.id : null,
-          action: 'logout', module: 'auth'
+        if (Auth.organization && Auth.user) {
+          await Promise.race([
+            client.from('activity_logs').insert({
+              organization_id: Auth.organization.id,
+              user_id: Auth.user.id,
+              action: 'logout', module: 'auth'
+            }),
+            new Promise(function (r) { setTimeout(r, 1000); })
+          ]);
+        }
+      } catch (e) { }
+      // 2. Sign out with a 2.5s cap — signOut can hang on flaky networks
+      try {
+        await Promise.race([
+          client.auth.signOut({ scope: 'local' }),
+          new Promise(function (r) { setTimeout(r, 2500); })
+        ]);
+      } catch (e) { console.warn('[auth] signOut error (continuing):', e && e.message); }
+      // 3. Belt-and-braces: remove any Supabase auth tokens from storage
+      try {
+        Object.keys(localStorage).forEach(function (k) {
+          if (k.indexOf('sb-') === 0 && k.indexOf('auth-token') !== -1) localStorage.removeItem(k);
         });
       } catch (e) { }
-      await client.auth.signOut();
-      window.location.replace('/login.html');
+      // 4. Always redirect
+      window.location.href = '/login.html';
     },
   };
+
+  // Wire logout via event delegation — attached immediately at script load,
+  // works even if the button is rendered later and independent of Auth.ready.
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('#logoutBtn') : null;
+    if (btn) { e.preventDefault(); Auth.logout(); }
+  });
 
   Auth.ready = (async function init() {
     // 1. Session check → redirect to login if absent
