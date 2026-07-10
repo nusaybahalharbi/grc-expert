@@ -10,6 +10,25 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/app/styles.css">
+<style>
+/* Global AI disclaimer — persistent across all pages, one source of truth */
+.main { position: relative; }
+.app-disclaimer {
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 7px 16px;
+  color: var(--text-dim, #64748B);
+  background: var(--bg-elev, #0B111E);
+  border-top: 1px solid var(--border, rgba(99,179,237,.08));
+  letter-spacing: .1px;
+  user-select: none;
+}
+@media (max-width: 640px) {
+  .app-disclaimer { font-size: 10px; padding: 6px 12px; }
+}
+</style>
 
 <!--
   CDN URLs — ALL VERIFIED:
@@ -138,6 +157,9 @@
         <div>GRC Expert</div>
       </div>
     </div>
+    <footer class="app-disclaimer" id="appDisclaimer">
+      GRC Expert can make mistakes. Verify important information before relying on it.
+    </footer>
   </main>
 </div>
 </body>
