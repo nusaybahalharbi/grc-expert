@@ -13,7 +13,7 @@
   'use strict';
 
   var esc = function (s) { return window.ui ? window.ui.escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s); };
-  var toast = function (m, t) { if (window.ui && window.ui.toast) window.ui.toast(m, t || 'success'); };
+  var toast = function (m, t, dur) { if (window.ui && window.ui.toast) window.ui.toast(m, t || 'success', dur); };
   function A() { return window.Auth; }
   function db() { return window.Auth.client; }
   function can(code) { return window.Auth && window.Auth.can(code); }
@@ -236,8 +236,8 @@
             clearTimeout(timer);
             var j = await resp.json().catch(function () { return {}; });
             if (!resp.ok) {
-              // Server already returns friendly, translated messages
-              toast(j.error || 'We couldn\'t create the user. Please try again later.', 'error');
+              // 503 = server env not configured; show its actionable message as-is
+              toast(j.error || 'We couldn\'t create the user. Please try again later.', 'error', resp.status === 503 ? 8000 : 4000);
               btn.disabled = false; btn.textContent = 'Send Invite';
               return;
             }
