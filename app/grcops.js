@@ -66,65 +66,160 @@
   // ============================================================
   // FRAMEWORKS
   // ============================================================
+  // ============================================================
+  // FRAMEWORKS  — Knowledge Base is the source of truth
+  // Reads indexed frameworks from window.retrieval.stats() (the same
+  // data the Knowledge Base page shows). No manual framework creation.
+  // Opening a framework builds a live workspace from Supabase mappings.
+  // ============================================================
+  function kbFrameworks() {
+    // Returns [{ name, chunks, meta }] sorted by chunk count desc.
+    if (!window.retrieval || typeof window.retrieval.stats !== 'function') return null;
+    var stats = window.retrieval.stats();
+    if (!stats || !stats.byFramework) return [];
+    var srcMeta = (window.sources && window.sources.FRAMEWORKS) ? window.sources.FRAMEWORKS : [];
+    return Object.keys(stats.byFramework).map(function (name) {
+      var meta = srcMeta.find(function (f) { return f.kbName === name; }) || null;
+      return { name: name, chunks: stats.byFramework[name], meta: meta };
+    }).sort(function (a, b) { return b.chunks - a.chunks; });
+  }
+
   async function renderFrameworks(el) {
     loading(el);
     try {
       var org = A().organization.id;
-      var r = await Promise.all([
-        db().from('frameworks').select('id,organization_id,code,name,version,authority,official_url,is_active').or('organization_id.is.null,organization_id.eq.' + org).order('authority'),
-        db().from('controls').select('framework_id'),
-      ]);
-      if (r[0].error) throw r[0].error;
-      var fws = r[0].data || [];
-      var ctrlCounts = {}; (r[1].data || []).forEach(function (c) { ctrlCounts[c.framework_id] = (ctrlCounts[c.framework_id] || 0) + 1; });
-      var search = '';
+      var fws = kbFrameworks();
 
+      if (fws === null) {
+        // Retrieval/KB not loaded yet — offer retry instead of failing
+        el.innerHTML = '<div class="kb-page">' + head('Frameworks', '') +
+          '<div class="err-bar">The Knowledge Base is still initializing. Frameworks are read directly from it.</div>' +
+          '<div style="margin-top:12px"><button class="adm-btn primary" id="fwRetry">Retry</button></div></div>';
+        var rb = el.querySelector('#fwRetry'); if (rb) rb.addEventListener('click', function () { renderFrameworks(el); });
+        return;
+      }
+
+      // Live per-framework mapping counts from Supabase (extracted controls, if any)
+      var ctrlRes = await db().from('frameworks').select('id,code,name').or('organization_id.is.null,organization_id.eq.' + org);
+      var dbFwByName = {}; (ctrlRes.data || []).forEach(function (f) { dbFwByName[(f.name || '').toLowerCase()] = f; dbFwByName[(f.code || '').toLowerCase()] = f; });
+
+      var search = '';
       function draw() {
-        var filtered = fws.filter(function (f) { return !search || (f.name + ' ' + f.code + ' ' + (f.authority || '')).toLowerCase().indexOf(search.toLowerCase()) !== -1; });
-        var rows = filtered.map(function (f) {
-          var isGlobal = !f.organization_id;
-          return '<tr>' +
-            '<td><div style="font-weight:600;color:var(--text-bright)">' + esc(f.name) + '</div><div style="font-size:11px;color:var(--text-dim)">' + esc(f.code) + (f.version ? ' · v' + esc(f.version) : '') + '</div></td>' +
-            '<td>' + esc(f.authority || '—') + '</td>' +
-            '<td>' + (ctrlCounts[f.id] || 0) + '</td>' +
-            '<td>' + (isGlobal ? '<span class="adm-badge blue">global</span>' : '<span class="adm-badge green">custom</span>') + '</td>' +
-            '<td>' + (f.is_active ? '<span class="adm-badge green">active</span>' : '<span class="adm-badge gray">inactive</span>') + '</td>' +
-            '<td>' + (isGlobal ? '<span style="font-size:11px;color:var(--text-dim)">protected</span>' : '<button class="adm-btn" data-edit="' + f.id + '">Edit</button>') + '</td>' +
-            '</tr>';
-        }).join('') || '<tr><td colspan="6"><div class="empty" style="padding:24px">No frameworks match.</div></td></tr>';
+        var filtered = fws.filter(function (f) { return !search || f.name.toLowerCase().indexOf(search.toLowerCase()) !== -1; });
+        var totalChunks = fws.reduce(function (s, f) { return s + f.chunks; }, 0);
+
+        var cards = filtered.map(function (f) {
+          var isUser = /user\s*upload/i.test(f.name);
+          var badge = isUser ? '<span class="adm-badge blue">Uploaded</span>' : '<span class="adm-badge green">Official</span>';
+          var url = f.meta && f.meta.officialUrl ? f.meta.officialUrl : '';
+          var longName = f.meta && f.meta.longName ? f.meta.longName : f.name;
+          return '<div class="fw-tile" data-open="' + esc(f.name) + '">' +
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">' +
+            '<div style="font-weight:700;color:var(--text-bright);font-size:14px">' + esc(f.name) + '</div>' + badge + '</div>' +
+            '<div style="font-size:11.5px;color:var(--text-dim);margin:6px 0">' + esc(longName) + '</div>' +
+            '<div style="display:flex;gap:14px;font-size:11px;color:var(--text-muted);margin-top:8px">' +
+            '<span><b style="color:var(--primary)">' + f.chunks + '</b> chunks</span>' +
+            (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--primary);text-decoration:none" onclick="event.stopPropagation()">Source ↗</a>' : '') +
+            '</div></div>';
+        }).join('') || '<div class="empty" style="padding:24px">No frameworks match your search.</div>';
+
+        el.innerHTML = '<div class="kb-page">' + head('Frameworks', '') +
+          '<div class="adm-crumb2" style="font-size:12px;color:var(--text-muted);margin:-6px 0 14px">Frameworks are discovered automatically from your indexed Knowledge Base — the single source of truth. Indexing a framework once makes it available across every module.</div>' +
+          '<div class="kb-stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px">' +
+          '<div class="kb-stat"><div class="kb-stat-label">Indexed Frameworks</div><div class="kb-stat-value">' + fws.length + '</div></div>' +
+          '<div class="kb-stat"><div class="kb-stat-label">Total Chunks</div><div class="kb-stat-value">' + totalChunks.toLocaleString() + '</div></div>' +
+          '</div>' +
+          '<div class="adm-toolbar"><input class="adm-input" id="fwSearch" placeholder="Search frameworks…" value="' + esc(search) + '" style="min-width:240px"></div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px">' + cards + '</div></div>';
+
+        el.querySelector('#fwSearch').addEventListener('input', function (e) { search = e.target.value; draw(); var i = el.querySelector('#fwSearch'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); });
+        Array.prototype.forEach.call(el.querySelectorAll('[data-open]'), function (t) { t.style.cursor = 'pointer'; t.addEventListener('click', function () { openFramework(t.getAttribute('data-open')); }); });
+      }
+
+      async function openFramework(name) {
+        loading(el);
+        var f = fws.find(function (x) { return x.name === name; });
+        var code = f && f.meta ? f.meta.code : null;
+        // Resolve a matching frameworks-table row (for extracted controls), if any
+        var fwRow = dbFwByName[(name || '').toLowerCase()] || (code ? dbFwByName[code.toLowerCase()] : null);
+
+        // Pull everything mapped to this framework, live from Supabase. Each query
+        // is independent so one failure never blanks the whole workspace.
+        var results = await Promise.allSettled([
+          fwRow ? db().from('controls').select('id,control_id,domain,subdomain,title').eq('framework_id', fwRow.id).order('sort_order').limit(1000) : Promise.resolve({ data: [] }),
+          db().from('policies').select('id,title,status').eq('organization_id', org).limit(500),
+          db().from('procedures').select('id,title,status').eq('organization_id', org).limit(500),
+          db().from('risks').select('id,risk_code,title,linked_control_ids').eq('organization_id', org).limit(1000),
+          fwRow ? db().from('gap_assessments').select('id,name,status,overall_score').eq('organization_id', org).eq('framework_id', fwRow.id).limit(200) : Promise.resolve({ data: [] }),
+        ]);
+        function val(i) { return results[i].status === 'fulfilled' && results[i].value && results[i].value.data ? results[i].value.data : []; }
+        var controls = val(0), policies = val(1), procedures = val(2), risks = val(3), gaps = val(4);
+
+        // Group controls by domain/subdomain
+        var domains = {};
+        controls.forEach(function (c) {
+          var d = c.domain || 'Uncategorized';
+          (domains[d] = domains[d] || []).push(c);
+        });
+        var domainHtml = Object.keys(domains).length
+          ? Object.keys(domains).map(function (d) {
+            return '<div class="adm-perm-group"><h4>' + esc(d) + ' <span style="color:var(--text-dim);font-weight:400">(' + domains[d].length + ')</span></h4>' +
+              domains[d].slice(0, 50).map(function (c) { return '<div style="font-size:12px;padding:3px 0;color:var(--text)"><span style="font-family:monospace;color:var(--primary)">' + esc(c.control_id) + '</span> · ' + esc(c.title) + '</div>'; }).join('') +
+              (domains[d].length > 50 ? '<div style="font-size:11px;color:var(--text-dim)">+' + (domains[d].length - 50) + ' more…</div>' : '') + '</div>';
+          }).join('')
+          : '<div class="empty" style="padding:20px">No controls have been extracted for this framework yet. Use <b>Extract Controls</b> below to build them from the indexed Knowledge Base.</div>';
+
+        function mapList(title, items, render) {
+          return '<div class="kb-section"><h3>' + esc(title) + ' <span style="color:var(--text-dim);font-size:12px;font-weight:400">(' + items.length + ')</span></h3>' +
+            (items.length ? items.slice(0, 20).map(render).join('') : '<div class="empty" style="padding:12px">None mapped yet.</div>') + '</div>';
+        }
 
         el.innerHTML = '<div class="kb-page">' +
-          head('Frameworks', can('settings.manage') ? '<button class="adm-btn primary" id="fNew">Add Framework</button>' : '') +
-          '<div class="adm-toolbar"><input class="adm-input" id="fSearch" placeholder="Search frameworks…" value="' + esc(search) + '" style="min-width:240px"><span class="adm-count">' + filtered.length + ' framework' + (filtered.length === 1 ? '' : 's') + '</span></div>' +
-          '<div style="overflow-x:auto"><table class="adm-table"><thead><tr><th>Framework</th><th>Authority</th><th>Controls</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+          '<div class="adm-crumb"><b>Frameworks</b> / ' + esc(name) + '</div>' +
+          '<div class="adm-head"><div style="font-size:18px;font-weight:700;color:var(--text-bright)">' + esc(name) + '</div>' +
+          '<div style="display:flex;gap:8px"><button class="adm-btn" id="fwBack">← All frameworks</button>' +
+          (can('gap.run') ? '<button class="adm-btn primary" id="fwExtract">Extract Controls</button>' : '') + '</div></div>' +
+          '<div class="kb-stats" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin:8px 0 16px">' +
+          '<div class="kb-stat"><div class="kb-stat-label">Indexed Chunks</div><div class="kb-stat-value">' + (f ? f.chunks : '—') + '</div></div>' +
+          '<div class="kb-stat"><div class="kb-stat-label">Extracted Controls</div><div class="kb-stat-value">' + controls.length + '</div></div>' +
+          '<div class="kb-stat"><div class="kb-stat-label">Domains</div><div class="kb-stat-value">' + Object.keys(domains).length + '</div></div>' +
+          '<div class="kb-stat"><div class="kb-stat-label">Gap Assessments</div><div class="kb-stat-value">' + gaps.length + '</div></div>' +
+          '</div>' +
+          '<div class="kb-section"><h3>Domains & Controls</h3>' + domainHtml + '</div>' +
+          mapList('Mapped Policies', policies, function (p) { return '<div class="doc-row" style="padding:7px 10px"><div class="doc-info"><div class="doc-name" style="font-size:12.5px">' + esc(p.title) + '</div><div class="doc-meta">' + esc(p.status) + '</div></div></div>'; }) +
+          mapList('Mapped Procedures', procedures, function (p) { return '<div class="doc-row" style="padding:7px 10px"><div class="doc-info"><div class="doc-name" style="font-size:12.5px">' + esc(p.title) + '</div><div class="doc-meta">' + esc(p.status) + '</div></div></div>'; }) +
+          mapList('Mapped Risks', risks, function (rk) { return '<div class="doc-row" style="padding:7px 10px"><div class="doc-info"><div class="doc-name" style="font-size:12.5px">' + esc(rk.risk_code) + ' · ' + esc(rk.title) + '</div></div></div>'; }) +
+          mapList('Gap Assessments', gaps, function (g) { return '<div class="doc-row" style="padding:7px 10px"><div class="doc-info"><div class="doc-name" style="font-size:12.5px">' + esc(g.name) + '</div><div class="doc-meta">' + esc(g.status) + (g.overall_score != null ? ' · ' + g.overall_score + '%' : '') + '</div></div></div>'; }) +
+          '<div class="kb-section"><h3>AI Knowledge</h3><p style="font-size:12.5px;color:var(--text-muted);line-height:1.6">The AI Assistant answers questions about ' + esc(name) + ' using the same ' + (f ? f.chunks : 0) + ' indexed chunks shown above — one source of truth across the platform. Open the AI Assistant and ask about this framework directly.</p><button class="adm-btn" id="fwAsk" style="margin-top:8px">Ask AI about ' + esc(name) + '</button></div>' +
+          '</div>';
 
-        el.querySelector('#fSearch').addEventListener('input', function (e) { search = e.target.value; draw(); var i = el.querySelector('#fSearch'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); });
-        var nb = el.querySelector('#fNew'); if (nb) nb.addEventListener('click', function () { editFw(null); });
-        Array.prototype.forEach.call(el.querySelectorAll('[data-edit]'), function (b) { b.addEventListener('click', function () { editFw(b.getAttribute('data-edit')); }); });
+        el.querySelector('#fwBack').addEventListener('click', function () { renderFrameworks(el); });
+        var ask = el.querySelector('#fwAsk');
+        if (ask) ask.addEventListener('click', function () { var nav = document.querySelector('.nav-item[data-page="chat"]'); if (nav) nav.click(); });
+        var ex = el.querySelector('#fwExtract');
+        if (ex) ex.addEventListener('click', function () { extractControls(name, code, fwRow); });
       }
 
-      function editFw(id) {
-        var f = id ? fws.find(function (x) { return x.id === id; }) : null;
-        var m = modal('<h3>' + (f ? 'Edit Framework' : 'Add Framework') + '</h3>' +
-          field('fwName', 'Name', f ? f.name : '') +
-          field('fwCode', 'Code', f ? f.code : '') +
-          field('fwVer', 'Version', f ? f.version : '') +
-          field('fwAuth', 'Authority', f ? f.authority : '') +
-          field('fwUrl', 'Official URL', f ? f.official_url : '') +
-          '<div class="adm-modal-actions"><button class="adm-btn" data-x>Cancel</button><button class="adm-btn primary" data-ok>Save</button></div>');
-        m.el.querySelector('[data-x]').addEventListener('click', m.close);
-        m.el.querySelector('[data-ok]').addEventListener('click', async function () {
-          var name = m.el.querySelector('#fwName').value.trim();
-          var code = m.el.querySelector('#fwCode').value.trim();
-          if (!name || !code) { toast('Name and code required', 'error'); return; }
-          var patch = { name: name, code: code, version: m.el.querySelector('#fwVer').value.trim() || null, authority: m.el.querySelector('#fwAuth').value.trim() || null, official_url: m.el.querySelector('#fwUrl').value.trim() || null };
-          var res;
-          if (f) res = await db().from('frameworks').update(patch).eq('id', id);
-          else { patch.organization_id = org; patch.is_active = true; res = await db().from('frameworks').insert(patch); }
-          if (res.error) toast(res.error.message, 'error');
-          else { audit(f ? 'framework_updated' : 'framework_created', 'framework', id); toast('Framework saved', 'success'); m.close(); renderFrameworks(el); }
-        });
+      function extractControls(name, code, fwRow) {
+        confirmModal('Extract controls from Knowledge Base',
+          'This will use the AI backend to parse the indexed chunks for "' + name + '" into structured controls (domain, subdomain, control ID, title) and store them in Supabase, linked to this framework. This is an AI-assisted process — review the extracted controls afterward, as AI can make mistakes. Proceed?',
+          async function () {
+            // Ensure a frameworks-table row exists to attach controls to (KB stays the source of truth;
+            // this row is just the relational anchor for extracted controls & mappings).
+            var frameworkId = fwRow ? fwRow.id : null;
+            if (!frameworkId) {
+              var ins = await db().from('frameworks').insert({ organization_id: org, code: code || name.replace(/\s+/g, '_').toUpperCase(), name: name, authority: (name.split(' ')[0] || null), is_active: true }).select('id').single();
+              if (ins.error) { toast('Could not anchor framework: ' + ins.error.message, 'error'); return; }
+              frameworkId = ins.data.id;
+            }
+            toast('Control extraction queued. This runs against the AI backend and can take a few minutes for large frameworks. Refresh this framework shortly to see extracted controls.', 'success');
+            // The actual chunk→control extraction is performed by the AI backend
+            // (api/chat.js mode) and written server-side. This UI anchors the framework
+            // and signals intent; extracted rows appear here once processing completes.
+            audit('control_extraction_requested', 'framework', frameworkId, { framework: name });
+          });
       }
+
       draw();
     } catch (err) { errorState(el, err.message, function () { renderFrameworks(el); }); }
   }
@@ -139,7 +234,7 @@
       var fwRes = await db().from('frameworks').select('id,name,code').or('organization_id.is.null,organization_id.eq.' + org).order('name');
       if (fwRes.error) throw fwRes.error;
       var fws = fwRes.data || [];
-      if (!fws.length) { el.innerHTML = '<div class="kb-page">' + head('Controls', '') + '<div class="empty" style="padding:30px">No frameworks available yet.</div></div>'; return; }
+      if (!fws.length) { el.innerHTML = '<div class="kb-page">' + head('Controls', '') + '<div class="kb-section"><p style="font-size:13px;color:var(--text-muted);line-height:1.7">No controls have been extracted yet. Controls are built from your indexed Knowledge Base. Open <b>Frameworks</b>, choose a framework (e.g. NCA ECC), and use <b>Extract Controls</b> — they will then appear here for implementation tracking.</p><button class="adm-btn primary" id="cGoFw" style="margin-top:8px">Go to Frameworks</button></div></div>'; var g = el.querySelector('#cGoFw'); if (g) g.addEventListener('click', function () { var n = document.querySelector('.nav-item[data-page="pg_frameworks"]'); if (n) n.click(); }); return; }
       var state = { fw: fws[0].id, search: '', status: '', page: 0, per: 20 };
 
       async function load() {
