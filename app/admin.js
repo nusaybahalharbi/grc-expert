@@ -711,6 +711,12 @@
       var tab = 'org';
       var subRes = await db().from('subscriptions').select('*').eq('organization_id', org.id).maybeSingle();
       var sub = subRes.data;
+      // resolve the current user's department name (for My Profile display)
+      var myDeptName = '—';
+      if (A2.user.department_id) {
+        var dRes = await db().from('departments').select('name').eq('id', A2.user.department_id).maybeSingle();
+        if (dRes.data) myDeptName = dRes.data.name;
+      }
 
       function draw() {
         var canOrg = can('settings.manage');
@@ -727,12 +733,16 @@
             field('oCountry', 'Country', org.country || '') +
             field('oTz', 'Time zone', org.timezone || 'Asia/Riyadh') +
             field('oContact', 'Contact email', org.contact_email || '', 'email') +
+            '<div class="adm-field"><label>Organization logo</label>' +
+            (org.logo_url ? '<div style="margin-bottom:8px"><img src="' + esc(org.logo_url) + '" alt="Current logo" style="max-height:48px;border-radius:6px;background:var(--bg-hover);padding:4px"></div>' : '') +
+            '<input id="oLogo" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp"><div style="font-size:11px;color:var(--text-dim);margin-top:4px">PNG, JPG, WebP or SVG · max 2 MB</div></div>' +
             '<button class="adm-btn primary" id="saveOrg" style="margin-top:8px">Save Organization</button></div>';
         } else if (tab === 'me') {
           body = '<div class="kb-section"><h3>My Profile</h3>' +
             field('pName', 'Full name', A2.user.full_name) +
             '<div class="adm-field"><label>Email</label><input value="' + esc(A2.user.email) + '" disabled></div>' +
             '<div class="adm-field"><label>Role(s)</label><input value="' + esc(A2.roles.join(', ') || 'None') + '" disabled></div>' +
+            '<div class="adm-field"><label>Department</label><input value="' + esc(myDeptName) + '" disabled></div>' +
             field('pTitle', 'Job title', A2.user.job_title || '') +
             '<button class="adm-btn primary" id="saveMe" style="margin-top:8px">Save Profile</button></div>' +
             '<div class="kb-section"><h3>Change Password</h3>' +
@@ -756,7 +766,7 @@
         } else if (tab === 'brand') {
           body = '<div class="kb-section"><h3>Branding</h3>' +
             '<div class="adm-field"><label>Primary display name</label><input value="' + esc(org.name) + '" disabled></div>' +
-            '<div class="adm-field"><label>Organization logo</label><div style="font-size:12px;color:var(--text-dim)">Logo upload uses Supabase Storage. Configure a public "logos" bucket to enable this.</div></div>' +
+            '<div class="adm-field"><label>Organization logo</label>' + (org.logo_url ? '<div><img src="' + esc(org.logo_url) + '" alt="Logo" style="max-height:56px;border-radius:6px;background:var(--bg-hover);padding:4px"></div><div style="font-size:11px;color:var(--text-dim);margin-top:4px">Upload a new logo from the Organization tab.</div>' : '<div style="font-size:12px;color:var(--text-dim)">No logo set. Upload one from the Organization tab (requires a public "logos" storage bucket).</div>') + '</div>' +
             '<div class="adm-field"><label>Email sender (SMTP)</label><div style="font-size:12.5px;color:var(--text-muted)">Custom SMTP status: <span class="adm-badge gray">Not configured</span><br><span style="font-size:11px;color:var(--text-dim)">Emails currently send via Supabase\'s default sender. Configure SMTP in Supabase → Auth → SMTP to use noreply@your-domain.</span></div></div></div>';
         } else if (tab === 'data') {
           body = '<div class="kb-section"><h3>Data & Retention</h3>' +
@@ -780,6 +790,7 @@
       function wire() {
         var so = el.querySelector('#saveOrg');
         if (so) so.addEventListener('click', async function () {
+          so.disabled = true; so.textContent = 'Saving…';
           var patch = {
             name: el.querySelector('#oName').value.trim(),
             legal_name: el.querySelector('#oLegal').value.trim() || null,
@@ -788,9 +799,29 @@
             timezone: el.querySelector('#oTz').value.trim() || null,
             contact_email: el.querySelector('#oContact').value.trim() || null,
           };
+          // Optional logo upload → Supabase Storage "logos" bucket (tenant-scoped path)
+          var fileInput = el.querySelector('#oLogo');
+          if (fileInput && fileInput.files && fileInput.files[0]) {
+            var f = fileInput.files[0];
+            if (f.size > 2 * 1024 * 1024) { toast('Logo must be under 2 MB', 'error'); so.disabled = false; so.textContent = 'Save Organization'; return; }
+            var ext = (f.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+            var path = org.id + '/logo-' + Date.now() + '.' + ext;
+            try {
+              var up = await db().storage.from('logos').upload(path, f, { upsert: true, contentType: f.type });
+              if (up.error) {
+                toast('Logo upload skipped: ' + up.error.message + ' (create a public "logos" storage bucket to enable)', 'error');
+              } else {
+                var pub = db().storage.from('logos').getPublicUrl(path);
+                if (pub && pub.data && pub.data.publicUrl) patch.logo_url = pub.data.publicUrl;
+              }
+            } catch (e) {
+              toast('Logo upload unavailable — saving other fields', 'error');
+            }
+          }
           var r = await db().from('organizations').update(patch).eq('id', org.id);
+          so.disabled = false; so.textContent = 'Save Organization';
           if (r.error) toast(r.error.message, 'error');
-          else { Object.assign(org, patch); toast('Organization saved', 'success'); }
+          else { Object.assign(org, patch); toast('Organization saved', 'success'); draw(); }
         });
         var sm = el.querySelector('#saveMe');
         if (sm) sm.addEventListener('click', async function () {
