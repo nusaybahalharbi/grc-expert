@@ -186,32 +186,67 @@
       }
 
       function inviteModal() {
-        var m = modal('<h3>Invite User</h3>' +
-          '<div class="adm-field"><label>Full name</label><input id="ivName" placeholder="Jane Doe"></div>' +
-          '<div class="adm-field"><label>Email</label><input id="ivEmail" type="email" placeholder="jane@company.com"></div>' +
-          '<p style="font-size:11px;color:var(--text-dim);line-height:1.5">An invitation email will be sent. The user joins your organization with no roles until you assign them.</p>' +
+        // Only offer roles the caller can actually grant (escalation guard mirrored in UI).
+        var myPerms = A().permissions; // Set of codes
+        var roleChecks = roles.map(function (ro) {
+          // We don't have each role's perms loaded here, so allow selection but the
+          // server enforces the escalation guard authoritatively. Administrator is flagged.
+          var isAdmin = ro.name === 'Administrator';
+          return '<label class="adm-check"><input type="checkbox" data-ivrole="' + ro.id + '"> ' + esc(ro.name) + (isAdmin ? ' <span class="adm-badge amber" style="margin-left:4px">privileged</span>' : '') + '</label>';
+        }).join('');
+        var deptOpts = '<option value="">— None —</option>' + depts.map(function (d) { return '<option value="' + d.id + '">' + esc(d.name) + '</option>'; }).join('');
+
+        var m = modal('<h3>Add User</h3>' +
+          '<div class="adm-field"><label>Full name *</label><input id="ivName" placeholder="Jane Doe"></div>' +
+          '<div class="adm-field"><label>Email *</label><input id="ivEmail" type="email" placeholder="jane@company.com"></div>' +
+          '<div class="adm-field"><label>Department</label><select id="ivDept">' + deptOpts + '</select></div>' +
+          '<div class="adm-field"><label>Job title</label><input id="ivTitle" placeholder="Optional"></div>' +
+          '<div class="adm-field"><label>Phone</label><input id="ivPhone" placeholder="Optional"></div>' +
+          '<div class="adm-field"><label>Initial role(s)</label>' + (roleChecks || '<div style="font-size:12px;color:var(--text-dim)">No roles defined yet.</div>') + '</div>' +
+          '<p style="font-size:11px;color:var(--text-dim);line-height:1.5">An invitation email will be sent. The user joins your organization with the selected department and roles.</p>' +
           '<div class="adm-modal-actions"><button class="adm-btn" data-x>Cancel</button><button class="adm-btn primary" data-ok>Send Invite</button></div>');
         m.el.querySelector('[data-x]').addEventListener('click', m.close);
         m.el.querySelector('[data-ok]').addEventListener('click', async function () {
           var name = m.el.querySelector('#ivName').value.trim();
           var email = m.el.querySelector('#ivEmail').value.trim();
-          if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast('Enter a valid name and email', 'error'); return; }
+          if (!name) { toast('Full name is required', 'error'); return; }
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast('Please enter a valid email address', 'error'); return; }
+          var roleIds = Array.prototype.slice.call(m.el.querySelectorAll('[data-ivrole]:checked')).map(function (c) { return c.getAttribute('data-ivrole'); });
+          var payload = {
+            full_name: name, email: email,
+            department_id: m.el.querySelector('#ivDept').value || null,
+            job_title: m.el.querySelector('#ivTitle').value.trim() || null,
+            phone: m.el.querySelector('#ivPhone').value.trim() || null,
+            role_ids: roleIds,
+          };
           var btn = m.el.querySelector('[data-ok]'); btn.disabled = true; btn.textContent = 'Sending…';
           try {
             var sess = await db().auth.getSession();
             var token = sess.data.session ? sess.data.session.access_token : '';
+            if (!token) { toast('Your session has expired. Please sign in again.', 'error'); btn.disabled = false; btn.textContent = 'Send Invite'; return; }
+            // 20s timeout → "Connection lost. Please retry."
+            var ctrl = new AbortController();
+            var timer = setTimeout(function () { ctrl.abort(); }, 20000);
             var resp = await fetch('/api/invite', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-              body: JSON.stringify({ email: email, full_name: name }),
+              body: JSON.stringify(payload),
+              signal: ctrl.signal,
             });
+            clearTimeout(timer);
             var j = await resp.json().catch(function () { return {}; });
-            if (!resp.ok) { toast(j.error || 'Invite failed', 'error'); btn.disabled = false; btn.textContent = 'Send Invite'; return; }
+            if (!resp.ok) {
+              // Server already returns friendly, translated messages
+              toast(j.error || 'We couldn\'t create the user. Please try again later.', 'error');
+              btn.disabled = false; btn.textContent = 'Send Invite';
+              return;
+            }
             toast('Invitation sent to ' + email, 'success');
             m.close();
-            renderUsers(el);
+            renderUsers(el); // refresh table immediately
           } catch (e) {
-            toast('Invite failed — is /api/invite deployed?', 'error');
+            if (e && e.name === 'AbortError') toast('Connection lost. Please retry.', 'error');
+            else toast('Connection lost. Please retry.', 'error');
             btn.disabled = false; btn.textContent = 'Send Invite';
           }
         });
