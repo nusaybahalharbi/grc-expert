@@ -221,7 +221,6 @@
           };
           var btn = m.el.querySelector('[data-ok]'); btn.disabled = true; btn.textContent = 'Sending…';
           try {
-            // Always obtain a fresh access token immediately before the API call.
             var sess = await db().auth.getSession();
             var session = sess && sess.data ? sess.data.session : null;
             if (!session) {
@@ -229,11 +228,10 @@
               btn.disabled = false; btn.textContent = 'Send Invite';
               return;
             }
-            // Refresh proactively when the JWT expires in the next 90 seconds.
-            var expiresAtMs = Number(session.expires_at || 0) * 1000;
-            if (!expiresAtMs || expiresAtMs - Date.now() < 90000) {
+            var expiresSoon = session.expires_at && (session.expires_at * 1000 - Date.now() < 60000);
+            if (expiresSoon) {
               var refreshed = await db().auth.refreshSession();
-              if (refreshed.error || !refreshed.data || !refreshed.data.session) {
+              if (refreshed.error || !refreshed.data.session) {
                 toast('Your session could not be refreshed. Please sign in again.', 'error');
                 btn.disabled = false; btn.textContent = 'Send Invite';
                 return;
@@ -254,9 +252,8 @@
             var j = await resp.json().catch(function () { return {}; });
             if (!resp.ok) {
               // 503 = server env not configured; show its actionable message as-is
-              var detail = j.error || 'We couldn\'t create the user. Please try again later.';
-              if (j.code) detail += ' [' + j.code + ']';
-              toast(detail, 'error', resp.status === 503 ? 8000 : 6000);
+              var detail = j.code ? ' [' + j.code + ']' : '';
+              toast((j.error || 'We couldn\'t create the user. Please try again later.') + detail, 'error', resp.status === 503 ? 8000 : 5000);
               btn.disabled = false; btn.textContent = 'Send Invite';
               return;
             }
