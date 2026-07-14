@@ -50,9 +50,12 @@
         const roleEl = document.getElementById('userChipRole');
         if (nameEl) nameEl.textContent = A.user.full_name;
         if (roleEl) roleEl.textContent = A.roles.join(', ') + ' · ' + A.organization.name;
-        const lo = document.getElementById('logoutBtn');
-        if (lo) lo.addEventListener('click', () => A.logout());
+        // NOTE: logout is wired in auth.js via event delegation — do not add a second handler here
         renderSidebar(); // re-render with permissions applied
+        if (window.Admin && window.Admin.updateBadge) {
+          window.Admin.updateBadge();
+          setInterval(function () { if (window.Admin && window.Admin.updateBadge) window.Admin.updateBadge(); }, 60000);
+        }
         if (State.currentPage === 'dashboard') renderPage(); // refresh dashboard with context
       }).catch(e => console.error('[app] Auth context failed:', e));
     }
@@ -305,7 +308,12 @@
       else area.innerHTML = '<div class="kb-page"><div class="empty">Dashboard module not loaded.</div></div>';
     } else if (State.currentPage.startsWith('pg_')) {
       inputBar.style.display = 'none';
-      renderPlaceholderPage(area);
+      if (window.Admin && window.Auth) {
+        window.Auth.ready.then(function () { window.Admin.render(State.currentPage, area); })
+          .catch(function () { window.Admin.render(State.currentPage, area); });
+      } else {
+        area.innerHTML = '<div class="kb-page"><div class="empty">Administration module not loaded.</div></div>';
+      }
     } else if (State.currentPage === 'knowledge') {
       renderKnowledgePage(area);
       inputBar.style.display = 'none';
@@ -322,77 +330,6 @@
       inputBar.style.display = '';
       updatePlaceholder();
     }
-  }
-
-  function renderPlaceholderPage(area) {
-    if (State.currentPage === 'pg_settings') { renderSettingsPage(area); return; }
-    const name = document.getElementById('topTitle').textContent;
-    area.innerHTML = `
-      <div class="kb-page">
-        <div class="welcome" style="min-height:auto;padding:40px 0">
-          <div class="welcome-icon">🛠</div>
-          <h2>${window.ui.escapeHtml(name)}</h2>
-          <p class="welcome-sub">This enterprise module is part of the platform roadmap and will be activated in an upcoming build step. The database tables and permissions behind it are already live.</p>
-        </div>
-      </div>`;
-  }
-
-  async function renderSettingsPage(area) {
-    await window.Auth.ready;
-    const A = window.Auth;
-    const esc = window.ui.escapeHtml;
-    area.innerHTML = `
-      <div class="kb-page">
-        <div class="kb-section"><h3>Organization Profile</h3>
-          <div class="kb-stat" style="max-width:520px">
-            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Organization name</label>
-            <input id="setOrgName" value="${esc(A.organization.name)}" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
-            <label style="font-size:11px;color:var(--text-muted);display:block;margin:12px 0 4px">Sector</label>
-            <input id="setOrgSector" value="${esc(A.organization.sector || '')}" placeholder="banking, telecom, government..." style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
-            <button class="btn-primary" id="saveOrgBtn" style="margin-top:14px;max-width:200px">Save Organization</button>
-          </div>
-        </div>
-        <div class="kb-section"><h3>My Profile</h3>
-          <div class="kb-stat" style="max-width:520px">
-            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Full name</label>
-            <input id="setUserName" value="${esc(A.user.full_name)}" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
-            <label style="font-size:11px;color:var(--text-muted);display:block;margin:12px 0 4px">Job title</label>
-            <input id="setUserTitle" value="${esc(A.user.job_title || '')}" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
-            <button class="btn-primary" id="saveUserBtn" style="margin-top:14px;max-width:200px">Save Profile</button>
-          </div>
-        </div>
-        <div class="kb-section"><h3>Change Password</h3>
-          <div class="kb-stat" style="max-width:520px">
-            <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">New password (min 8 characters)</label>
-            <input id="setNewPass" type="password" style="width:100%;padding:9px 12px;border-radius:8px;background:var(--bg-hover);border:1px solid var(--border-strong);color:var(--text);font-family:inherit;font-size:13px">
-            <button class="btn-primary" id="savePassBtn" style="margin-top:14px;max-width:200px">Update Password</button>
-          </div>
-        </div>
-      </div>`;
-
-    document.getElementById('saveOrgBtn').addEventListener('click', async () => {
-      const r = await A.client.from('organizations').update({
-        name: document.getElementById('setOrgName').value.trim(),
-        sector: document.getElementById('setOrgSector').value.trim() || null,
-      }).eq('id', A.organization.id);
-      if (r.error) window.ui.toast('Failed: ' + r.error.message, 'error');
-      else { A.organization.name = document.getElementById('setOrgName').value.trim(); window.ui.toast('Organization saved', 'success'); }
-    });
-    document.getElementById('saveUserBtn').addEventListener('click', async () => {
-      const r = await A.client.from('users').update({
-        full_name: document.getElementById('setUserName').value.trim(),
-        job_title: document.getElementById('setUserTitle').value.trim() || null,
-      }).eq('id', A.user.id);
-      if (r.error) window.ui.toast('Failed: ' + r.error.message, 'error');
-      else { A.user.full_name = document.getElementById('setUserName').value.trim(); window.ui.toast('Profile saved', 'success'); }
-    });
-    document.getElementById('savePassBtn').addEventListener('click', async () => {
-      const p = document.getElementById('setNewPass').value;
-      if (p.length < 8) return window.ui.toast('Minimum 8 characters', 'error');
-      const r = await A.client.auth.updateUser({ password: p });
-      if (r.error) window.ui.toast('Failed: ' + r.error.message, 'error');
-      else { document.getElementById('setNewPass').value = ''; window.ui.toast('Password updated', 'success'); }
-    });
   }
 
   function renderChatPage(area) {
