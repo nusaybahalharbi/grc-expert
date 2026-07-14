@@ -1,212 +1,220 @@
 /**
- * GRC Expert — Secure User Invitation Endpoint
- * POST /api/invite   →  place at  api/invite.js
- *
- * Architecture (browser NEVER holds service_role):
- *   Frontend → this route → validate JWT → verify caller is an Administrator
- *   → use SERVICE_ROLE (server-only) → create auth user → create public.users
- *   → assign org + department + role(s) → invite email → audit log → success.
- *
- * Env vars (Vercel → Settings → Environment Variables):
+ * GRC Expert — secure user invitation endpoint.
+ * Requires Vercel env vars:
  *   SUPABASE_URL
- *   SUPABASE_SERVICE_ROLE_KEY   (server-only)
- *   APP_ORIGIN                  (e.g. https://grc-expert.vercel.app)
- *
- * MULTI-TENANCY POLICY: one organization per user (Option B).
- *   An email already registered in ANY organization is rejected.
+ *   SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY)
+ *   SUPABASE_SERVICE_ROLE_KEY (legacy service_role JWT or new sb_secret_* key)
+ *   APP_ORIGIN
  */
+const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const PUBLIC_KEY = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+const ADMIN_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
 const APP_ORIGIN = process.env.APP_ORIGIN || '';
 
-const rl = new Map();
-function rateLimited(key, max, windowMs) {
+const rateLimitStore = new Map();
+function isRateLimited(key, max = 10, windowMs = 60_000) {
   const now = Date.now();
-  const rec = rl.get(key) || { n: 0, reset: now + windowMs };
-  if (now > rec.reset) { rec.n = 0; rec.reset = now + windowMs; }
-  rec.n++; rl.set(key, rec);
-  return rec.n > max;
+  let item = rateLimitStore.get(key);
+  if (!item || now >= item.resetAt) item = { count: 0, resetAt: now + windowMs };
+  item.count += 1;
+  rateLimitStore.set(key, item);
+  return item.count > max;
 }
 
-async function sb(path, opts) {
-  const res = await fetch(SUPABASE_URL + path, {
-    ...opts,
-    headers: {
-      apikey: SERVICE_KEY,
-      Authorization: 'Bearer ' + SERVICE_KEY,
-      'Content-Type': 'application/json',
-      ...(opts && opts.headers ? opts.headers : {}),
-    },
-  });
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch (e) { json = null; }
-  return { ok: res.ok, status: res.status, json };
-}
-
-async function deleteAuthUser(id) {
-  try { await sb('/auth/v1/admin/users/' + id, { method: 'DELETE' }); } catch (e) { }
+function jsonError(res, status, code, message) {
+  return res.status(status).json({ ok: false, code, error: message });
 }
 
 module.exports = async function handler(req, res) {
   const origin = req.headers.origin || '';
-  if (APP_ORIGIN && origin === APP_ORIGIN) res.setHeader('Access-Control-Allow-Origin', APP_ORIGIN);
+  if (APP_ORIGIN && origin === APP_ORIGIN) {
+    res.setHeader('Access-Control-Allow-Origin', APP_ORIGIN);
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  res.setHeader('Cache-Control', 'no-store');
 
-  if (!SUPABASE_URL || !SERVICE_KEY) {
-    // Distinct, actionable message: this ONLY fires when Vercel env vars are missing.
-    // (Not a secret — it just tells the admin the server needs configuring.)
-    return res.status(503).json({ error: 'The invitation service is not configured yet. An administrator must set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the deployment environment.' });
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'POST') return jsonError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed.');
+
+  if (!SUPABASE_URL || !PUBLIC_KEY || !ADMIN_KEY) {
+    return jsonError(
+      res,
+      503,
+      'SERVER_NOT_CONFIGURED',
+      'The invitation service is not fully configured. Add SUPABASE_URL, SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY), and SUPABASE_SERVICE_ROLE_KEY in Vercel, then redeploy.'
+    );
   }
 
   try {
-    // 1. Validate JWT
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (!token) return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+    const authHeader = String(req.headers.authorization || '');
+    const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!accessToken) return jsonError(res, 401, 'TOKEN_MISSING', 'Your session has expired. Please sign in again.');
 
-    const userRes = await fetch(SUPABASE_URL + '/auth/v1/user', {
-      headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + token },
+    // Validate the user's JWT with a public project key. Do not use a new sb_secret_* key as a Bearer JWT.
+    const authClient = createClient(SUPABASE_URL, PUBLIC_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     });
-    if (!userRes.ok) return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
-    const caller = await userRes.json();
-    const callerId = caller.id;
-    if (!callerId) return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
-
-    // 2. Rate limit
-    if (rateLimited('invite:' + callerId, 15, 60 * 1000)) {
-      return res.status(429).json({ error: 'Too many attempts. Please wait a minute and try again.' });
+    const { data: userData, error: userError } = await authClient.auth.getUser(accessToken);
+    const caller = userData && userData.user;
+    if (userError || !caller || !caller.id) {
+      console.warn('[invite] token validation failed:', userError && userError.message);
+      return jsonError(res, 401, 'TOKEN_INVALID', 'Your session has expired. Please sign in again.');
     }
 
-    // 3. Resolve caller profile (org + active)
-    const profRes = await sb('/rest/v1/users?id=eq.' + callerId + '&select=organization_id,status', { method: 'GET' });
-    if (!profRes.ok || !profRes.json || !profRes.json[0]) {
-      return res.status(403).json({ error: 'You do not have permission to add users.' });
-    }
-    const orgId = profRes.json[0].organization_id;
-    if (profRes.json[0].status !== 'active') {
-      return res.status(403).json({ error: 'You do not have permission to add users.' });
+    if (isRateLimited('invite:' + caller.id)) {
+      return jsonError(res, 429, 'RATE_LIMITED', 'Too many invitation attempts. Please wait one minute and try again.');
     }
 
-    // 4. Verify caller has users.manage; collect caller perms for escalation guard
-    const roleRes = await sb('/rest/v1/user_roles?user_id=eq.' + callerId +
-      '&select=roles(name,role_permissions(permissions(code)))', { method: 'GET' });
-    let isAdmin = false;
-    const callerPermCodes = {};
-    if (roleRes.ok && Array.isArray(roleRes.json)) {
-      isAdmin = JSON.stringify(roleRes.json).indexOf('users.manage') !== -1;
-      roleRes.json.forEach(function (ur) {
-        const r = ur.roles;
-        if (r && Array.isArray(r.role_permissions)) {
-          r.role_permissions.forEach(function (rp) {
-            if (rp.permissions && rp.permissions.code) callerPermCodes[rp.permissions.code] = true;
-          });
-        }
+    // SDK handles both legacy service_role JWTs and new sb_secret_* keys correctly.
+    const admin = createClient(SUPABASE_URL, ADMIN_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+
+    const { data: profile, error: profileError } = await admin
+      .from('users')
+      .select('id, organization_id, status')
+      .eq('id', caller.id)
+      .maybeSingle();
+    if (profileError) {
+      console.error('[invite] caller profile:', profileError.message);
+      return jsonError(res, 500, 'CALLER_PROFILE_FAILED', 'We could not verify your organization membership.');
+    }
+    if (!profile || profile.status !== 'active' || !profile.organization_id) {
+      return jsonError(res, 403, 'CALLER_NOT_ACTIVE', 'You do not have permission to invite users.');
+    }
+    const orgId = profile.organization_id;
+
+    const { data: roleLinks, error: roleLinksError } = await admin
+      .from('user_roles')
+      .select('role_id, roles(name, role_permissions(permissions(code)))')
+      .eq('user_id', caller.id);
+    if (roleLinksError) {
+      console.error('[invite] caller permissions:', roleLinksError.message);
+      return jsonError(res, 500, 'CALLER_PERMISSION_QUERY_FAILED', 'We could not verify your permissions.');
+    }
+
+    const callerPermissions = new Set();
+    (roleLinks || []).forEach((link) => {
+      const role = link.roles;
+      (role && role.role_permissions || []).forEach((rp) => {
+        if (rp.permissions && rp.permissions.code) callerPermissions.add(rp.permissions.code);
       });
+    });
+    if (!callerPermissions.has('users.manage')) {
+      return jsonError(res, 403, 'PERMISSION_DENIED', 'You do not have permission to invite users.');
     }
-    if (!isAdmin) return res.status(403).json({ error: 'You do not have permission to add users.' });
 
-    // 5. Validate + normalize input
-    const body = req.body && typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
     const email = String(body.email || '').trim().toLowerCase();
     const fullName = String(body.full_name || '').trim().slice(0, 120);
     const jobTitle = body.job_title ? String(body.job_title).trim().slice(0, 120) : null;
     const phone = body.phone ? String(body.phone).trim().slice(0, 40) : null;
     const departmentId = body.department_id ? String(body.department_id) : null;
-    const roleIds = Array.isArray(body.role_ids) ? body.role_ids.map(String).slice(0, 20) : [];
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
-    if (!fullName) return res.status(400).json({ error: 'Full name is required.' });
+    const requestedRoleIds = Array.isArray(body.role_ids) ? [...new Set(body.role_ids.map(String))].slice(0, 20) : [];
 
-    // 6. Validate department belongs to caller's org
+    if (!fullName) return jsonError(res, 400, 'FULL_NAME_REQUIRED', 'Full name is required.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return jsonError(res, 400, 'EMAIL_INVALID', 'Please enter a valid email address.');
+
     if (departmentId) {
-      const dRes = await sb('/rest/v1/departments?id=eq.' + departmentId + '&organization_id=eq.' + orgId + '&select=id', { method: 'GET' });
-      if (!dRes.ok || !dRes.json || !dRes.json[0]) return res.status(400).json({ error: 'The selected department is invalid.' });
+      const { data: department, error: departmentError } = await admin
+        .from('departments')
+        .select('id')
+        .eq('id', departmentId)
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      if (departmentError || !department) return jsonError(res, 400, 'DEPARTMENT_INVALID', 'The selected department is invalid.');
     }
 
-    // 7. Validate roles belong to org AND caller isn't escalating privileges
     const validRoleIds = [];
-    if (roleIds.length) {
-      const orFilter = roleIds.map(function (id) { return 'id.eq.' + id; }).join(',');
-      const rRes = await sb('/rest/v1/roles?or=(' + encodeURIComponent(orFilter) + ')&organization_id=eq.' + orgId +
-        '&select=id,name,role_permissions(permissions(code))', { method: 'GET' });
-      if (!rRes.ok || !Array.isArray(rRes.json)) return res.status(400).json({ error: 'The selected role is invalid.' });
-      for (const r of rRes.json) {
-        const perms = (r.role_permissions || []).map(function (rp) { return rp.permissions ? rp.permissions.code : null; }).filter(Boolean);
-        const missing = perms.filter(function (c) { return !callerPermCodes[c]; });
-        if (missing.length > 0) {
-          return res.status(403).json({ error: 'You cannot assign a role with more permissions than your own.' });
+    if (requestedRoleIds.length) {
+      const { data: selectedRoles, error: selectedRolesError } = await admin
+        .from('roles')
+        .select('id, role_permissions(permissions(code))')
+        .eq('organization_id', orgId)
+        .in('id', requestedRoleIds);
+      if (selectedRolesError || !selectedRoles || selectedRoles.length !== requestedRoleIds.length) {
+        return jsonError(res, 400, 'ROLE_INVALID', 'One or more selected roles are invalid.');
+      }
+      for (const role of selectedRoles) {
+        const codes = (role.role_permissions || []).map((rp) => rp.permissions && rp.permissions.code).filter(Boolean);
+        if (codes.some((code) => !callerPermissions.has(code))) {
+          return jsonError(res, 403, 'ROLE_ESCALATION_BLOCKED', 'You cannot assign a role with permissions above your own.');
         }
-        validRoleIds.push(r.id);
+        validRoleIds.push(role.id);
       }
     }
 
-    // 8. One-per-org duplicate detection (Option B)
-    const existing = await sb('/auth/v1/admin/users?filter=' + encodeURIComponent('email.eq.' + email), { method: 'GET' });
-    let existingId = null;
-    if (existing.ok && existing.json) {
-      const list = Array.isArray(existing.json.users) ? existing.json.users : (Array.isArray(existing.json) ? existing.json : []);
-      const match = list.find(function (u) { return (u.email || '').toLowerCase() === email; });
-      if (match) existingId = match.id;
-    }
-    if (existingId) {
-      const eProf = await sb('/rest/v1/users?id=eq.' + existingId + '&select=organization_id', { method: 'GET' });
-      if (eProf.ok && eProf.json && eProf.json[0]) {
-        if (eProf.json[0].organization_id === orgId) {
-          return res.status(409).json({ error: 'This user already belongs to your organization.' });
-        }
-        return res.status(409).json({ error: 'This email is already registered in another organization.' });
+    // Reliable duplicate lookup through paginated Auth Admin API.
+    let page = 1;
+    let existingAuthUser = null;
+    while (page <= 20 && !existingAuthUser) {
+      const { data: pageData, error: pageError } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
+      if (pageError) {
+        console.error('[invite] list users:', pageError.message);
+        return jsonError(res, 500, 'AUTH_LOOKUP_FAILED', 'We could not verify whether this email is already registered.');
       }
-      return res.status(409).json({ error: 'This email is already registered.' });
+      const users = pageData && pageData.users || [];
+      existingAuthUser = users.find((u) => String(u.email || '').toLowerCase() === email) || null;
+      if (users.length < 1000) break;
+      page += 1;
     }
+    if (existingAuthUser) return jsonError(res, 409, 'EMAIL_ALREADY_REGISTERED', 'This email is already registered.');
 
-    // 9. Create the auth user via invite (sends invitation email)
-    const invite = await sb('/auth/v1/invite', {
-      method: 'POST',
-      body: JSON.stringify({ email: email, data: { full_name: fullName } }),
+    const redirectTo = (APP_ORIGIN || origin || '').replace(/\/$/, '') + '/login.html';
+    const { data: inviteData, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
+      redirectTo,
+      data: { full_name: fullName, organization_id: orgId },
     });
-    if (!invite.ok) {
-      const msg = invite.json && invite.json.msg ? invite.json.msg : '';
-      if (/already|registered|exists/i.test(msg)) return res.status(409).json({ error: 'This email is already registered.' });
-      return res.status(500).json({ error: 'We couldn\'t create the user. Please try again later.' });
-    }
-    const newUserId = (invite.json && invite.json.id) ? invite.json.id : (invite.json && invite.json.user ? invite.json.user.id : null);
-    if (!newUserId) return res.status(500).json({ error: 'We couldn\'t create the user. Please try again later.' });
-
-    // 10. Create public.users profile
-    const prof = await sb('/rest/v1/users', {
-      method: 'POST', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        id: newUserId, organization_id: orgId, email: email, full_name: fullName,
-        job_title: jobTitle, phone: phone, department_id: departmentId, status: 'invited',
-      }),
-    });
-    if (!prof.ok) {
-      await deleteAuthUser(newUserId);
-      return res.status(500).json({ error: 'We couldn\'t create the user. Please try again later.' });
+    if (inviteError || !inviteData || !inviteData.user) {
+      console.error('[invite] auth invite:', inviteError && inviteError.message);
+      const duplicate = inviteError && /already|registered|exists/i.test(inviteError.message || '');
+      return jsonError(res, duplicate ? 409 : 500, duplicate ? 'EMAIL_ALREADY_REGISTERED' : 'AUTH_INVITE_FAILED', duplicate ? 'This email is already registered.' : 'We could not send the invitation email.');
     }
 
-    // 11. Assign roles
-    if (validRoleIds.length) {
-      const rows = validRoleIds.map(function (rid) { return { user_id: newUserId, role_id: rid, assigned_by: callerId }; });
-      await sb('/rest/v1/user_roles', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(rows) });
+    const newUserId = inviteData.user.id;
+    let provisioningComplete = false;
+    try {
+      const { error: profileUpsertError } = await admin.from('users').upsert({
+        id: newUserId,
+        organization_id: orgId,
+        email,
+        full_name: fullName,
+        job_title: jobTitle,
+        phone,
+        department_id: departmentId,
+        status: 'invited',
+      }, { onConflict: 'id' });
+      if (profileUpsertError) throw Object.assign(new Error(profileUpsertError.message), { code: 'PROFILE_UPSERT_FAILED' });
+
+      if (validRoleIds.length) {
+        const rows = validRoleIds.map((roleId) => ({ user_id: newUserId, role_id: roleId, assigned_by: caller.id }));
+        const { error: assignmentError } = await admin.from('user_roles').upsert(rows, { onConflict: 'user_id,role_id', ignoreDuplicates: true });
+        if (assignmentError) throw Object.assign(new Error(assignmentError.message), { code: 'ROLE_ASSIGNMENT_FAILED' });
+      }
+
+      await admin.from('audit_logs').insert({
+        organization_id: orgId,
+        user_id: caller.id,
+        event: 'user_invited',
+        entity_type: 'user',
+        entity_id: newUserId,
+        after_state: { email, full_name: fullName, department_id: departmentId, role_ids: validRoleIds },
+      });
+      provisioningComplete = true;
+    } catch (provisionError) {
+      console.error('[invite] provisioning:', provisionError.message);
+      await admin.auth.admin.deleteUser(newUserId).catch(() => {});
+      return jsonError(res, 500, provisionError.code || 'PROVISIONING_FAILED', 'The invitation was created but workspace provisioning failed, so it was rolled back.');
     }
 
-    // 12. Audit
-    await sb('/rest/v1/audit_logs', {
-      method: 'POST', headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        organization_id: orgId, user_id: callerId, event: 'user_invited',
-        entity_type: 'user', entity_id: newUserId,
-        after_state: { email: email, full_name: fullName, department_id: departmentId, role_ids: validRoleIds },
-      }),
-    });
-
-    return res.status(200).json({ ok: true, user_id: newUserId });
-  } catch (err) {
-    return res.status(500).json({ error: 'We couldn\'t create the user. Please try again later.' });
+    if (!provisioningComplete) return jsonError(res, 500, 'PROVISIONING_FAILED', 'We could not finish creating the user.');
+    return res.status(200).json({ ok: true, user_id: newUserId, message: 'Invitation sent.' });
+  } catch (error) {
+    console.error('[invite] unexpected:', error);
+    return jsonError(res, 500, 'UNEXPECTED_ERROR', 'We could not create the user. Please try again later.');
   }
 };

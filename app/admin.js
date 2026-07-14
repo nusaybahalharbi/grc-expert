@@ -221,9 +221,26 @@
           };
           var btn = m.el.querySelector('[data-ok]'); btn.disabled = true; btn.textContent = 'Sending…';
           try {
+            // Always obtain a fresh access token immediately before the API call.
             var sess = await db().auth.getSession();
-            var token = sess.data.session ? sess.data.session.access_token : '';
-            if (!token) { toast('Your session has expired. Please sign in again.', 'error'); btn.disabled = false; btn.textContent = 'Send Invite'; return; }
+            var session = sess && sess.data ? sess.data.session : null;
+            if (!session) {
+              toast('Your session has expired. Please sign in again.', 'error');
+              btn.disabled = false; btn.textContent = 'Send Invite';
+              return;
+            }
+            // Refresh proactively when the JWT expires in the next 90 seconds.
+            var expiresAtMs = Number(session.expires_at || 0) * 1000;
+            if (!expiresAtMs || expiresAtMs - Date.now() < 90000) {
+              var refreshed = await db().auth.refreshSession();
+              if (refreshed.error || !refreshed.data || !refreshed.data.session) {
+                toast('Your session could not be refreshed. Please sign in again.', 'error');
+                btn.disabled = false; btn.textContent = 'Send Invite';
+                return;
+              }
+              session = refreshed.data.session;
+            }
+            var token = session.access_token;
             // 20s timeout → "Connection lost. Please retry."
             var ctrl = new AbortController();
             var timer = setTimeout(function () { ctrl.abort(); }, 20000);
@@ -237,7 +254,9 @@
             var j = await resp.json().catch(function () { return {}; });
             if (!resp.ok) {
               // 503 = server env not configured; show its actionable message as-is
-              toast(j.error || 'We couldn\'t create the user. Please try again later.', 'error', resp.status === 503 ? 8000 : 4000);
+              var detail = j.error || 'We couldn\'t create the user. Please try again later.';
+              if (j.code) detail += ' [' + j.code + ']';
+              toast(detail, 'error', resp.status === 503 ? 8000 : 6000);
               btn.disabled = false; btn.textContent = 'Send Invite';
               return;
             }

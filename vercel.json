@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "api/chat.js": { "maxDuration": 60 },
+    "api/invite.js": { "maxDuration": 30 },
+    "api/health.js": { "maxDuration": 10 }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}
