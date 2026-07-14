@@ -308,11 +308,16 @@
       else area.innerHTML = '<div class="kb-page"><div class="empty">Dashboard module not loaded.</div></div>';
     } else if (State.currentPage.startsWith('pg_')) {
       inputBar.style.display = 'none';
-      if (window.Admin && window.Auth) {
-        window.Auth.ready.then(function () { window.Admin.render(State.currentPage, area); })
-          .catch(function () { window.Admin.render(State.currentPage, area); });
+      var opsPages = ['pg_frameworks', 'pg_controls', 'pg_policies', 'pg_procedures', 'pg_risks', 'pg_gaps', 'pg_evidence', 'pg_evidence_review', 'pg_tasks', 'pg_reports'];
+      var isOps = opsPages.indexOf(State.currentPage) !== -1;
+      var mod = isOps ? window.GRCOps : window.Admin;
+      var modName = isOps ? 'Operations' : 'Administration';
+      if (mod && window.Auth) {
+        var page = State.currentPage;
+        window.Auth.ready.then(function () { mod.render(page, area); })
+          .catch(function () { mod.render(page, area); });
       } else {
-        area.innerHTML = '<div class="kb-page"><div class="empty">Administration module not loaded.</div></div>';
+        area.innerHTML = '<div class="kb-page"><div class="empty">' + modName + ' module not loaded.</div></div>';
       }
     } else if (State.currentPage === 'knowledge') {
       renderKnowledgePage(area);

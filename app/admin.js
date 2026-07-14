@@ -1010,5 +1010,12 @@
     }
   }
 
-  window.Admin = { render: render, updateBadge: updateBadge };
+  window.Admin = {
+    render: render, updateBadge: updateBadge,
+    ui: {
+      esc: esc, toast: toast, A: A, db: db, can: can, fmtDate: fmtDate, fmtDT: fmtDT,
+      injectStyles: injectStyles, loading: loading, denied: denied, errorState: errorState,
+      head: head, modal: modal, confirmModal: confirmModal
+    }
+  };
 })(window);
