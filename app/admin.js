@@ -237,7 +237,7 @@
             var j = await resp.json().catch(function () { return {}; });
             if (!resp.ok) {
               // 503 = server env not configured; show its actionable message as-is
-              toast(j.error || 'We couldn\'t create the user. Please try again later.', 'error', resp.status === 503 ? 8000 : 4000);
+              toast((j.error || 'We couldn\'t create the user. Please try again later.') + (j.code ? ' [' + j.code + ']' : ''), 'error', resp.status === 503 ? 8000 : 6000);
               btn.disabled = false; btn.textContent = 'Send Invite';
               return;
             }
