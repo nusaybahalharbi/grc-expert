@@ -1,8 +1,8 @@
 {
   "name": "grc-expert",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "private": true,
-  "description": "AI-Powered Saudi & International GRC Compliance Platform",
+  "description": "Premium AI-powered enterprise governance, risk and compliance platform",
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"
   }
