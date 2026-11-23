@@ -2,8 +2,7 @@
  * GRC Expert API - v2.1 (Production Hardened)
  *
  * Fixes:
- *  - Only uses gemini-2.5-flash (main) and gemini-2.5-flash-lite (fallback)
- *  - Removed all deprecated model references
+ *  - Uses OpenAI's Responses API
  *  - Deduplicates retrieved chunks before sending
  *  - Trims chunk text to prevent token explosion
  *  - Anti-repetition: explicit instruction + lower temperature for tables
@@ -14,10 +13,9 @@
 
 const https = require("https");
 
-// ONLY supported models in 2026
-const MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const MODELS = [process.env.OPENAI_MODEL || "gpt-6.2-astra"];
 
-const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 120000);
+const REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 120000);
 const SERVER_TIME_BUDGET_MS = Number(process.env.SERVER_TIME_BUDGET_MS || 115000);
 const RETRY_BASE_DELAY_MS = 1200;
 const MAX_CHUNK_TEXT_CHARS = 1500;
@@ -314,17 +312,17 @@ function buildSystemPrompt({ mode, generator, organizationContext, retrievedChun
   return prompt;
 }
 
-// ============ GEMINI CALL ============
+// ============ OPENAI CALL ============
 
-function callGemini(modelName, apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) {
+function callOpenAI(apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const path = `/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     const options = {
-      hostname: "generativelanguage.googleapis.com",
+      hostname: "api.openai.com",
       port: 443,
-      path,
+      path: "/v1/responses",
       method: "POST",
       headers: {
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(payload),
       },
@@ -338,7 +336,7 @@ function callGemini(modelName, apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) 
         try {
           resolve({ status: res.statusCode, data: JSON.parse(data) });
         } catch (e) {
-          reject(new Error(`Parse error from ${modelName}: ${data.substring(0, 200)}`));
+          reject(new Error(`Parse error from OpenAI: ${data.substring(0, 200)}`));
         }
       });
     });
@@ -346,7 +344,7 @@ function callGemini(modelName, apiKey, payload, timeoutMs = REQUEST_TIMEOUT_MS) 
     req.on("error", (err) => reject(err));
     req.on("timeout", () => {
       req.destroy();
-      reject(new Error(`Timeout calling ${modelName} after ${timeoutMs}ms`));
+      reject(new Error(`Timeout calling OpenAI after ${timeoutMs}ms`));
     });
 
     req.write(payload);
@@ -531,11 +529,11 @@ async function handler(req, res) {
     return res.status(405).json({ error: { message: "Method not allowed" } });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    console.error("[chat] Missing GEMINI_API_KEY");
+    console.error("[chat] Missing OPENAI_API_KEY");
     return res.status(500).json({
-      error: { message: "GEMINI_API_KEY not set in Vercel environment variables." },
+      error: { message: "OPENAI_API_KEY not set in Vercel environment variables." },
     });
   }
 
@@ -566,9 +564,9 @@ async function handler(req, res) {
     const totalCtxChars = cleanedChunks.reduce((s, c) => s + c.text.length, 0);
     console.log(`[chat] Final context: ${cleanedChunks.length} chunks, ${totalCtxChars} chars`);
 
-    const contents = messages.map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
+    const input = messages.map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content || ""),
     }));
 
     const systemPrompt = buildSystemPrompt({
@@ -580,23 +578,11 @@ async function handler(req, res) {
     });
 
     const isLargeOutput = ["risk_register", "policy", "procedure", "gap", "audit_evidence", "mapping_doc"].includes(generator);
-    const config = {
-      maxOutputTokens: isLargeOutput ? 8192 : 4096,
-      temperature: isLargeOutput ? 0.3 : 0.5,
-      topP: 0.9,
-      topK: 40,
-    };
-
     const payload = JSON.stringify({
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: config,
-      safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-      ],
+      model: MODELS[0],
+      instructions: systemPrompt,
+      input,
+      max_output_tokens: isLargeOutput ? 8192 : 4096,
     });
 
     console.log(`[chat] Payload: ${(payload.length / 1024).toFixed(1)}KB`);
@@ -622,22 +608,24 @@ async function handler(req, res) {
         try {
           console.log(`[chat] Calling ${model} (attempt ${attempt}/${maxAttempts}, timeout=${attemptTimeoutMs}ms)`);
           const callStart = Date.now();
-          const result = await callGemini(model, apiKey, payload, attemptTimeoutMs);
+          const result = await callOpenAI(apiKey, payload, attemptTimeoutMs);
           const callDuration = Date.now() - callStart;
           console.log(`[chat] ${model} responded in ${callDuration}ms with status ${result.status}`);
 
-          if (result.status === 200 && result.data.candidates) {
+          if (result.status === 200 && Array.isArray(result.data.output)) {
             let text = "";
-            const parts = result.data.candidates[0]?.content?.parts || [];
-            for (const part of parts) {
-              if (part.text) text += part.text;
+            for (const item of result.data.output) {
+              if (item.type !== "message" || !Array.isArray(item.content)) continue;
+              for (const part of item.content) {
+                if (part.type === "output_text" && part.text) text += part.text;
+              }
             }
 
             if (!text) {
-              const finishReason = result.data.candidates[0]?.finishReason;
-              console.warn(`[chat] Empty response from ${model}, reason: ${finishReason}`);
+              const finishReason = result.data.status || "unknown";
+              console.warn(`[chat] Empty response from ${model}, status: ${finishReason}`);
               return res.status(200).json({
-                content: [{ type: "text", text: `The AI returned an empty response (reason: ${finishReason || "unknown"}). Please rephrase your question.` }],
+                content: [{ type: "text", text: `The AI returned an empty response (status: ${finishReason}). Please rephrase your question.` }],
                 modelUsed: model,
                 citations: [],
               });
@@ -701,7 +689,7 @@ async function handler(req, res) {
     console.error(`[chat] ALL MODELS FAILED. Last error:`, lastError);
     return res.status(503).json({
       error: {
-        message: `All Gemini models unavailable. Last error: ${lastError?.message || "Unknown"} (${lastError?.model}). Please try again.`,
+        message: `OpenAI is currently unavailable. Last error: ${lastError?.message || "Unknown"} (${lastError?.model}). Please try again.`,
       },
       lastError,
     });
